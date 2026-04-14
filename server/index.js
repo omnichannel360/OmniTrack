@@ -20,6 +20,98 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "omnitrack-datalayer-studio", version: "1.0.0" });
 });
 
+// Bootstrap: create required content models idempotently (headSnippet, seoSchema, dataLayerScript)
+const CONTENT_MODELS = {
+  headSnippet: {
+    name: "Head Snippet",
+    description: "Injected head/body snippets (GA4, GTM, GSC) managed by OmniTrack.",
+    displayField: "toolType",
+    fields: [
+      { id: "toolType", name: "Tool Type", type: "Symbol", required: true, localized: false },
+      { id: "identifier", name: "Identifier", type: "Symbol", required: false, localized: false },
+      { id: "code", name: "Code", type: "Text", required: true, localized: false },
+      { id: "updatedAt", name: "Updated At", type: "Date", required: false, localized: false }
+    ]
+  },
+  seoSchema: {
+    name: "SEO Schema",
+    description: "JSON-LD structured data entries generated and managed by OmniTrack.",
+    displayField: "schemaType",
+    fields: [
+      { id: "sourceEntryId", name: "Source Entry ID", type: "Symbol", required: true, localized: false },
+      { id: "contentTypeId", name: "Content Type ID", type: "Symbol", required: true, localized: false },
+      { id: "schemaType", name: "Schema Type", type: "Symbol", required: true, localized: false },
+      { id: "jsonLd", name: "JSON-LD", type: "Text", required: true, localized: false },
+      { id: "updatedAt", name: "Updated At", type: "Date", required: false, localized: false }
+    ]
+  },
+  dataLayerScript: {
+    name: "Data Layer Script",
+    description: "GA4 dataLayer.push scripts per Contentful content type (OmniTrack).",
+    displayField: "contentTypeId",
+    fields: [
+      { id: "contentTypeId", name: "Content Type ID", type: "Symbol", required: true, localized: false },
+      { id: "scriptCode", name: "Script Code", type: "Text", required: true, localized: false },
+      { id: "events", name: "GA4 Events", type: "Array", items: { type: "Symbol" }, required: false, localized: false },
+      { id: "updatedAt", name: "Updated At", type: "Date", required: false, localized: false }
+    ]
+  }
+};
+
+app.post("/api/contentful/bootstrap", async (req, res) => {
+  const { spaceId, cmaToken, environment } = req.body;
+  if (!spaceId || !cmaToken) return res.status(400).json({ error: "spaceId and cmaToken are required" });
+  const env = environment || "master";
+  const base = `https://api.contentful.com/spaces/${encodeURIComponent(spaceId)}/environments/${encodeURIComponent(env)}`;
+  const authHeaders = {
+    "Authorization": `Bearer ${cmaToken}`,
+    "Content-Type": "application/vnd.contentful.management.v1+json"
+  };
+  const results = [];
+  try {
+    for (const [id, model] of Object.entries(CONTENT_MODELS)) {
+      const step = { id, created: false, published: false, skipped: false, error: null };
+      try {
+        const getRes = await fetch(`${base}/content_types/${id}`, { headers: authHeaders });
+        let version = 0;
+        let exists = false;
+        if (getRes.ok) {
+          const body = await getRes.json();
+          version = body.sys?.version || 0;
+          exists = true;
+        }
+        const putRes = await fetch(`${base}/content_types/${id}`, {
+          method: "PUT",
+          headers: { ...authHeaders, ...(exists ? { "X-Contentful-Version": String(version) } : {}) },
+          body: JSON.stringify(model)
+        });
+        if (!putRes.ok) {
+          step.error = `${putRes.status} ${await putRes.text()}`;
+          results.push(step);
+          continue;
+        }
+        const putBody = await putRes.json();
+        step.created = !exists;
+        step.skipped = exists;
+        const newVersion = putBody.sys?.version || 1;
+        const pubRes = await fetch(`${base}/content_types/${id}/published`, {
+          method: "PUT",
+          headers: { ...authHeaders, "X-Contentful-Version": String(newVersion) }
+        });
+        step.published = pubRes.ok;
+        if (!pubRes.ok) step.error = `publish ${pubRes.status}: ${await pubRes.text()}`;
+      } catch (e) {
+        step.error = e.message;
+      }
+      results.push(step);
+    }
+    const allOk = results.every(r => r.published && !r.error);
+    res.json({ success: allOk, environment: env, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Proxy: Contentful CDA - fetch content types
 app.get("/api/contentful/content-types", async (req, res) => {
   const { spaceId, cdaToken } = req.query;

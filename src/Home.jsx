@@ -2,6 +2,13 @@ import { Header, Icon } from "./shared.jsx";
 
 const TOOLS = [
   {
+    id: "bootstrap",
+    icon: "\u26A1", iconClass: "dl",
+    title: "Bootstrap Contentful",
+    desc: "One-click setup. Auto-creates required content models (headSnippet, seoSchema, dataLayerScript). Run this first.",
+    meta: "Run once \u00B7 CMA token"
+  },
+  {
     id: "datalayer",
     icon: "DL", iconClass: "dl",
     title: "Data Layer",
@@ -12,7 +19,7 @@ const TOOLS = [
     id: "ga4",
     icon: "GA", iconClass: "ga",
     title: "GA4",
-    desc: "Inject Google Analytics 4 gtag.js snippet into the site <head> via the CMS headSnippet entry.",
+    desc: "Inject Google Analytics 4 gtag.js snippet into the site head via the CMS headSnippet entry.",
     meta: "Measurement ID \u00B7 gtag.js"
   },
   {
@@ -26,7 +33,7 @@ const TOOLS = [
     id: "gsc",
     icon: "GSC", iconClass: "gsc",
     title: "GSC Verification",
-    desc: "Inject Google Search Console site verification meta tag into the site <head> for domain ownership.",
+    desc: "Inject Google Search Console site verification meta tag into the site head for domain ownership.",
     meta: "<meta> tag \u00B7 head"
   },
   {
@@ -35,6 +42,13 @@ const TOOLS = [
     title: "Schema",
     desc: "Pull entries from Contentful, analyze content, generate JSON-LD schema, and inject back as SEO entries.",
     meta: "JSON-LD \u00B7 schema.org"
+  },
+  {
+    id: "nextjs",
+    icon: "NXT", iconClass: "ga",
+    title: "Next.js Integration",
+    desc: "Generate the Next.js component that reads injected entries from Contentful and renders them in your site head.",
+    meta: "App Router \u00B7 1-file drop"
   }
 ];
 
@@ -44,12 +58,13 @@ export default function Home({ onSelect }) {
       <Header
         title="OmniChannel Data Layer Studio"
         subtitle="Unified CMS injection for tracking, verification and structured data"
-        badge="v1.1 \u00B7 Internal"
+        badge="v1.2 \u00B7 Internal"
       />
       <p className="phase-title">Choose a Tool</p>
       <p className="phase-sub">
-        Each tool manages its own environment and credentials. Injections land in Contentful without
-        disturbing existing content types, themes or layouts.
+        Run <strong>Bootstrap</strong> first to auto-provision Contentful. Then use any tool;
+        they each manage their own environment and credentials.
+        Inject Next.js integration once so new entries appear on the live site automatically.
       </p>
       <div className="home-grid">
         {TOOLS.map(t => (
