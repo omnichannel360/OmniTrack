@@ -77,6 +77,93 @@ app.post("/api/contentful/inject", async (req, res) => {
   }
 });
 
+// Fetch entries of a content type
+app.get("/api/contentful/entries", async (req, res) => {
+  const { spaceId, cdaToken, contentTypeId, limit } = req.query;
+  if (!spaceId || !cdaToken) {
+    return res.status(400).json({ error: "spaceId and cdaToken are required" });
+  }
+  try {
+    const qs = new URLSearchParams({ access_token: cdaToken, limit: limit || "25" });
+    if (contentTypeId) qs.set("content_type", contentTypeId);
+    const url = `https://cdn.contentful.com/spaces/${encodeURIComponent(spaceId)}/entries?${qs.toString()}`;
+    const r = await fetch(url);
+    if (!r.ok) return res.status(r.status).json({ error: `Contentful CDA error: ${r.status}` });
+    res.json(await r.json());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generic head-snippet inject (GA4 / GTM / GSC)
+app.post("/api/contentful/inject-head", async (req, res) => {
+  const { spaceId, cmaToken, toolType, identifier, code } = req.body;
+  if (!spaceId || !cmaToken) {
+    return res.status(400).json({ error: "spaceId and cmaToken are required" });
+  }
+  try {
+    const r = await fetch(`https://api.contentful.com/spaces/${encodeURIComponent(spaceId)}/entries`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${cmaToken}`,
+        "Content-Type": "application/vnd.contentful.management.v1+json",
+        "X-Contentful-Content-Type": "headSnippet"
+      },
+      body: JSON.stringify({
+        fields: {
+          toolType: { "en-US": toolType },
+          identifier: { "en-US": identifier || "" },
+          code: { "en-US": code },
+          updatedAt: { "en-US": new Date().toISOString() }
+        }
+      })
+    });
+    if (r.ok) {
+      const d = await r.json();
+      res.json({ success: true, entryId: d.sys?.id });
+    } else {
+      res.status(r.status).json({ error: await r.text() });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// JSON-LD schema inject back as seoSchema entry linked to source entry
+app.post("/api/contentful/inject-schema", async (req, res) => {
+  const { spaceId, cmaToken, entryId, contentTypeId, schemaType, jsonLd } = req.body;
+  if (!spaceId || !cmaToken) {
+    return res.status(400).json({ error: "spaceId and cmaToken are required" });
+  }
+  try {
+    const r = await fetch(`https://api.contentful.com/spaces/${encodeURIComponent(spaceId)}/entries`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${cmaToken}`,
+        "Content-Type": "application/vnd.contentful.management.v1+json",
+        "X-Contentful-Content-Type": "seoSchema"
+      },
+      body: JSON.stringify({
+        fields: {
+          sourceEntryId: { "en-US": entryId || "" },
+          contentTypeId: { "en-US": contentTypeId || "" },
+          schemaType: { "en-US": schemaType || "Thing" },
+          jsonLd: { "en-US": typeof jsonLd === "string" ? jsonLd : JSON.stringify(jsonLd) },
+          updatedAt: { "en-US": new Date().toISOString() }
+        }
+      })
+    });
+    if (r.ok) {
+      const d = await r.json();
+      res.json({ success: true, entryId: d.sys?.id });
+    } else {
+      res.status(r.status).json({ error: await r.text() });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // SPA fallback - serve index.html for all non-API routes
 app.get("/{*path}", (_req, res) => {
   res.sendFile(join(__dirname, "../dist/index.html"));
