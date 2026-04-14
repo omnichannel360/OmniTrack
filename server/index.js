@@ -112,6 +112,74 @@ app.post("/api/contentful/bootstrap", async (req, res) => {
   }
 });
 
+// Scan Contentful space for global/layout/settings models with injection-point fields
+app.post("/api/contentful/scan-globals", async (req, res) => {
+  const { spaceId, cdaToken, environment } = req.body;
+  if (!spaceId || !cdaToken) return res.status(400).json({ error: "spaceId and cdaToken are required" });
+  const env = environment || "master";
+  const base = `https://cdn.contentful.com/spaces/${encodeURIComponent(spaceId)}/environments/${encodeURIComponent(env)}`;
+  try {
+    const ctRes = await fetch(`${base}/content_types?access_token=${encodeURIComponent(cdaToken)}&limit=200`);
+    if (!ctRes.ok) return res.status(ctRes.status).json({ error: `CDA error ${ctRes.status}` });
+    const ctData = await ctRes.json();
+    const types = ctData.items || [];
+
+    const GLOBAL_NAME_HINTS = /^(site|global|layout|config|settings|tracking|analytics|seo|header|footer|meta|head|scripts?|injection)/i;
+    const FIELD_NAME_HINTS = /(head|script|tracking|analytics|gtm|ga4|gsc|verif|metatag|meta.?tag|schema|jsonld|custom.?head|body.?snippet|snippet|inject|tag|seo)/i;
+
+    const candidates = types.map(ct => {
+      const nameScore = GLOBAL_NAME_HINTS.test(ct.sys.id) || GLOBAL_NAME_HINTS.test(ct.name) ? 3 : 0;
+      const fieldMatches = (ct.fields || []).filter(f =>
+        (f.type === "Text" || f.type === "Symbol" || f.type === "Object") &&
+        FIELD_NAME_HINTS.test(f.id + " " + (f.name || ""))
+      );
+      const fieldScore = fieldMatches.length * 2;
+      const total = nameScore + fieldScore;
+      return {
+        contentTypeId: ct.sys.id,
+        name: ct.name,
+        description: ct.description || "",
+        totalFields: (ct.fields || []).length,
+        matchedFields: fieldMatches.map(f => ({ id: f.id, name: f.name, type: f.type })),
+        score: total,
+        verdict: total >= 5 ? "strong" : total >= 2 ? "possible" : "none"
+      };
+    }).filter(c => c.score > 0).sort((a, b) => b.score - a.score);
+
+    const strong = candidates.filter(c => c.verdict === "strong");
+    let sampleEntries = [];
+    if (strong.length > 0) {
+      const top = strong[0];
+      const eRes = await fetch(`${base}/entries?access_token=${encodeURIComponent(cdaToken)}&content_type=${encodeURIComponent(top.contentTypeId)}&limit=3`);
+      if (eRes.ok) {
+        const eData = await eRes.json();
+        sampleEntries = (eData.items || []).map(e => ({ id: e.sys.id, fields: Object.keys(e.fields || {}) }));
+      }
+    }
+
+    const yoloPossible = strong.length > 0;
+    const recommendation = yoloPossible
+      ? `YOLO possible \u2014 inject directly into "${strong[0].contentTypeId}" field(s): ${strong[0].matchedFields.map(f => f.id).join(", ")}`
+      : candidates.length > 0
+        ? "Possible candidates found but no strong injection point \u2014 may require one-time model addition"
+        : "No global/settings/tracking content type found \u2014 one-time SiteSettings model creation recommended";
+
+    res.json({
+      success: true,
+      spaceId,
+      environment: env,
+      totalContentTypes: types.length,
+      yoloPossible,
+      recommendation,
+      topCandidate: strong[0] || null,
+      sampleEntries,
+      candidates
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Proxy: Contentful CDA - fetch content types
 app.get("/api/contentful/content-types", async (req, res) => {
   const { spaceId, cdaToken } = req.query;

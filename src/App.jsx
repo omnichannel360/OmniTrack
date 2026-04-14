@@ -7,11 +7,13 @@ import GSCTool from "./tools/GSCTool.jsx";
 import SchemaTool from "./tools/SchemaTool.jsx";
 import BootstrapTool from "./tools/BootstrapTool.jsx";
 import NextJsIntegrationTool from "./tools/NextJsIntegrationTool.jsx";
+import ScannerTool from "./tools/ScannerTool.jsx";
 
 export default function App() {
   const [view, setView] = useState("home");
   const goHome = () => setView("home");
 
+  if (view === "scanner") return <ScannerTool onHome={goHome} />;
   if (view === "bootstrap") return <BootstrapTool onHome={goHome} />;
   if (view === "datalayer") return <DataLayerTool onHome={goHome} />;
   if (view === "ga4") return <GA4Tool onHome={goHome} />;

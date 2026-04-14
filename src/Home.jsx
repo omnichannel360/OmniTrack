@@ -2,6 +2,13 @@ import { Header, Icon } from "./shared.jsx";
 
 const TOOLS = [
   {
+    id: "scanner",
+    icon: "\u2315", iconClass: "gsc",
+    title: "Content Model Scanner",
+    desc: "One-click analysis of your Contentful space. Detects global/layout/tracking content types that allow zero-code injection. Run this first to plan your strategy.",
+    meta: "Read-only scan \u00B7 CDA token"
+  },
+  {
     id: "bootstrap",
     icon: "\u26A1", iconClass: "dl",
     title: "Bootstrap Contentful",
