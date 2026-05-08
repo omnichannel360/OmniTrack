@@ -205,10 +205,19 @@ app.get("/api/contentful/content-types", async (req, res) => {
 
 // Validate CMA token: hits Contentful /spaces/{id} with token. Returns auth status + space info or precise error.
 app.post("/api/contentful/validate-cma", async (req, res) => {
-  const { spaceId, cmaToken } = req.body;
+  let { spaceId, cmaToken } = req.body;
   if (!spaceId || !cmaToken) {
     return res.status(400).json({ valid: false, error: "spaceId and cmaToken are required" });
   }
+  // Trim whitespace/newlines from paste artifacts
+  const rawTokenLength = cmaToken.length;
+  spaceId = String(spaceId).trim();
+  cmaToken = String(cmaToken).trim().replace(/[\r\n\t ]/g, "");
+  const trimmed = rawTokenLength !== cmaToken.length;
+
+  // Detect token type
+  const tokenLooksLikePAT = cmaToken.startsWith("CFPAT-");
+  const tokenLooksLikeCDA = !tokenLooksLikePAT && cmaToken.length > 30 && /^[A-Za-z0-9_-]+$/.test(cmaToken);
 
   try {
     const r = await fetch(`https://api.contentful.com/spaces/${encodeURIComponent(spaceId)}`, {
@@ -216,11 +225,21 @@ app.post("/api/contentful/validate-cma", async (req, res) => {
     });
 
     if (r.status === 401) {
+      let message;
+      if (tokenLooksLikePAT) {
+        message = `PAT format detected (CFPAT-) but rejected. Possible: token revoked, expired, or needs Authorize click in Contentful Account → CMA tokens page. Token tail: ...${cmaToken.slice(-6)}`;
+      } else if (tokenLooksLikeCDA) {
+        message = "Token format does NOT match Personal Access Token (CFPAT-... prefix expected). Likely pasted CDA or CPA. Get a PAT at https://app.contentful.com/account/profile/cma_tokens";
+      } else {
+        message = "Token rejected by Contentful. Verify it starts with 'CFPAT-' and is from Account → CMA tokens (not Space → API keys).";
+      }
       return res.json({
         valid: false,
         status: 401,
         reason: "unauthorized",
-        message: "Token rejected by Contentful. Likely cause: pasted CDA/CPA token in CMA field. CMA needs a Personal Access Token (PAT) from https://app.contentful.com/account/profile/cma_tokens"
+        message,
+        tokenFormat: tokenLooksLikePAT ? "pat" : tokenLooksLikeCDA ? "cda_or_cpa" : "unknown",
+        whitespaceTrimmed: trimmed
       });
     }
     if (r.status === 404) {
@@ -267,10 +286,12 @@ app.post("/api/contentful/validate-cma", async (req, res) => {
 
 // Proxy: Contentful CMA - inject script entry
 app.post("/api/contentful/inject", async (req, res) => {
-  const { spaceId, cmaToken, contentTypeId, scriptCode, events } = req.body;
+  let { spaceId, cmaToken, contentTypeId, scriptCode, events } = req.body;
   if (!spaceId || !cmaToken) {
     return res.status(400).json({ error: "spaceId and cmaToken are required" });
   }
+  spaceId = String(spaceId).trim();
+  cmaToken = String(cmaToken).trim().replace(/[\r\n\t ]/g, "");
 
   try {
     const response = await fetch(`https://api.contentful.com/spaces/${encodeURIComponent(spaceId)}/entries`, {

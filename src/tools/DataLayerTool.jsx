@@ -245,16 +245,22 @@ export default function DataLayerTool({ onHome }) {
   }
 
   async function validateCmaToken() {
-    if (!config.spaceId || !config.cmaToken) {
+    const cleanSpace = (config.spaceId || "").trim();
+    const cleanToken = (config.cmaToken || "").trim().replace(/[\r\n\t ]/g, "");
+    if (!cleanSpace || !cleanToken) {
       setCmaValidation(null);
       return;
+    }
+    // Auto-clean state if user pasted with whitespace
+    if (cleanSpace !== config.spaceId || cleanToken !== config.cmaToken) {
+      setConfig(p => ({ ...p, spaceId: cleanSpace, cmaToken: cleanToken }));
     }
     setValidatingCma(true);
     try {
       const r = await fetch(`${API_BASE}/contentful/validate-cma`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId: config.spaceId, cmaToken: config.cmaToken })
+        body: JSON.stringify({ spaceId: cleanSpace, cmaToken: cleanToken })
       });
       const data = await r.json();
       setCmaValidation(data);
@@ -591,8 +597,16 @@ export default function DataLayerTool({ onHome }) {
                   </div>
                 )}
                 {cmaValidation && !cmaValidation.valid && (
-                  <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.4 }}>
+                  <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.5 }}>
                     ✗ {cmaValidation.status || "?"} · {cmaValidation.message}
+                    {cmaValidation.tokenFormat === "pat" && cmaValidation.status === 401 && (
+                      <div style={{ marginTop: 6, color: "var(--warn)", padding: "6px 8px", background: "rgba(255,181,71,0.08)", border: "1px solid rgba(255,181,71,0.2)", borderRadius: 4 }}>
+                        <strong>PAT detected but rejected.</strong> Check on Contentful CMA tokens page:<br />
+                        1. Click <strong>Authorize</strong> button next to your token (newer Contentful security)<br />
+                        2. Verify token not expired/revoked<br />
+                        3. Confirm token name matches the one you pasted
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
