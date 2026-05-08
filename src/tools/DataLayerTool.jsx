@@ -349,7 +349,23 @@ export default function DataLayerTool({ onHome }) {
     setScripts([]);
     setProgress(0);
     const selectedCTs = contentTypes.filter(ct => selected[ct.sys.id]);
-    const liveInteractions = (scanResult?.interactions || []).filter(it => selectedInteractions[interactionKey(it)]);
+
+    // Live interactions: prefer explicit selection. If user has scanResult but selectedInteractions is empty
+    // (e.g. forgot to click Select All), include ALL discovered interactions as a safe default so user
+    // never loses their scan work silently.
+    let liveInteractions = (scanResult?.interactions || []).filter(it => selectedInteractions[interactionKey(it)]);
+    if (liveInteractions.length === 0 && (scanResult?.interactions?.length || 0) > 0) {
+      liveInteractions = scanResult.interactions;
+      console.warn("[Generate] selectedInteractions empty, defaulting to all", liveInteractions.length, "scanned interactions");
+    }
+
+    console.info("[Generate]", {
+      contentTypes: selectedCTs.length,
+      scanInteractions: scanResult?.interactions?.length || 0,
+      selectedKeys: Object.keys(selectedInteractions).length,
+      liveToGenerate: liveInteractions.length
+    });
+
     const total = selectedCTs.length + (liveInteractions.length > 0 ? 1 : 0);
     const results = [];
     let stepIdx = 0;
@@ -703,45 +719,71 @@ export default function DataLayerTool({ onHome }) {
         <>
           <p className="phase-title">Generate Data Layer Scripts</p>
           <p className="phase-sub">Each content type gets a production-ready GA4 Enhanced Ecommerce dataLayer.push() script.</p>
-          {!generating && scripts.length === 0 && (
-            <div className="card">
-              <div className="empty-state">
-                <div className="big">{"</>"}</div>
-                <div>Ready to generate {selectedCount} scripts covering {Object.entries(selected).filter(([, v]) => v).reduce((a, [k]) => a + (GA4_EVENT_MAP[k] || ["page_view"]).length, 0)} GA4 events.</div>
-                <br />
-                <button className="btn btn-primary" onClick={handleGenerate} style={{ margin: "0 auto" }}><Icon name="code" /> Generate All Scripts</button>
+          {!generating && scripts.length === 0 && (() => {
+            const liveCount = Object.values(selectedInteractions).filter(Boolean).length;
+            const liveAvail = scanResult?.interactions?.length || 0;
+            const ga4Count = Object.entries(selected).filter(([, v]) => v).reduce((a, [k]) => a + (GA4_EVENT_MAP[k] || ["page_view"]).length, 0) + (liveCount || liveAvail || 0);
+            return (
+              <div className="card">
+                <div className="empty-state">
+                  <div className="big">{"</>"}</div>
+                  <div>Ready to generate <strong>{selectedCount} content type{selectedCount === 1 ? "" : "s"}</strong>
+                    {(liveCount > 0 || liveAvail > 0) && (
+                      <> + <strong style={{ color: "var(--accent)" }}>{liveCount || liveAvail} live site interaction{(liveCount || liveAvail) === 1 ? "" : "s"}</strong></>
+                    )}
+                    {" "}covering ~{ga4Count} GA4 events.
+                  </div>
+                  {liveAvail > 0 && liveCount === 0 && (
+                    <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(255,181,71,0.08)", border: "1px solid rgba(255,181,71,0.25)", borderRadius: 6, color: "var(--warn)", fontSize: 12 }}>
+                      <Icon name="warn" /> {liveAvail} interactions discovered but none selected. All will be included by default. Go back to Discover to filter.
+                    </div>
+                  )}
+                  <br />
+                  <button className="btn btn-primary" onClick={handleGenerate} style={{ margin: "0 auto" }}><Icon name="code" /> Generate All Scripts</button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           {generating && (
             <div className="card">
               <div className="card-title"><span className="spinner" style={{ color: "var(--accent)" }} /> Generating scripts...</div>
               <div className="progress-bar-wrap"><div className="progress-bar" style={{ width: progress + "%" }} /></div>
-              <div className="progress-label">{progress}% complete {"\u00B7"} {scripts.length} / {selectedCount} scripts</div>
+              <div className="progress-label">{progress}% complete {"\u00B7"} {scripts.length} scripts so far</div>
             </div>
           )}
-          {scripts.length > 0 && (
-            <div className="card">
-              <div className="card-title">
-                <span className="dot" />{scripts.length} Scripts Generated
-                <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                  <button className="copy-btn" onClick={copyAll}>{"\u29C7"} Copy All</button>
-                </span>
-              </div>
-              {scripts.map((s, i) => (
-                <div className="script-block" key={i}>
-                  <div className="script-header">
-                    <div className="script-label"><strong>{s.ct.name}</strong> {"\u00B7"} {s.ct.sys.id}</div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <div className="tag-row">{s.events.map(e => <span className="badge badge-purple" key={e}>{e}</span>)}</div>
-                      <button className="copy-btn" onClick={() => copyScript(i)}>{copyStates[i] ? "\u2713 Copied" : "\u29C7 Copy"}</button>
-                    </div>
-                  </div>
-                  <pre>{s.code}</pre>
+          {scripts.length > 0 && (() => {
+            const liveScripts = scripts.filter(s => s.kind === "liveSite");
+            const ctScripts = scripts.filter(s => s.kind !== "liveSite");
+            return (
+              <div className="card">
+                <div className="card-title">
+                  <span className="dot" />{scripts.length} Scripts Generated
+                  <span style={{ marginLeft: 8, fontSize: 11, fontFamily: "var(--mono)", color: "var(--text2)" }}>
+                    {ctScripts.length} content type{ctScripts.length === 1 ? "" : "s"}
+                    {liveScripts.length > 0 && <> {"\u00B7"} <span style={{ color: "var(--accent)" }}>{liveScripts.reduce((a, s) => a + (s.interactions?.length || 0), 0)} live interactions</span></>}
+                  </span>
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                    <button className="copy-btn" onClick={copyAll}>{"\u29C7"} Copy All</button>
+                  </span>
                 </div>
-              ))}
-            </div>
-          )}
+                {scripts.map((s, i) => (
+                  <div className="script-block" key={i} style={s.kind === "liveSite" ? { borderColor: "var(--accent)" } : {}}>
+                    <div className="script-header">
+                      <div className="script-label">
+                        {s.kind === "liveSite" && <span className="badge" style={{ background: "rgba(0,229,255,0.15)", color: "var(--accent)", marginRight: 8 }}>LIVE SITE</span>}
+                        <strong>{s.ct.name}</strong> {"\u00B7"} {s.ct.sys.id}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <div className="tag-row">{s.events.map(e => <span className="badge badge-purple" key={e}>{e}</span>)}</div>
+                        <button className="copy-btn" onClick={() => copyScript(i)}>{copyStates[i] ? "\u2713 Copied" : "\u29C7 Copy"}</button>
+                      </div>
+                    </div>
+                    <pre>{s.code}</pre>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           <div className="actions">
             <button className="btn btn-ghost" onClick={() => setPhase(1)}>{"\u2190"} Back</button>
             {scripts.length > 0 && !generating && (
