@@ -203,6 +203,9 @@ export default function DataLayerTool({ onHome }) {
   const [scripts, setScripts] = useState([]);
   const [injecting, setInjecting] = useState(false);
   const [injected, setInjected] = useState(false);
+  const [injectStats, setInjectStats] = useState({ ok: 0, failed: 0, errors: [] });
+  const [cmaValidation, setCmaValidation] = useState(null); // { valid, message, ... } from validate-cma
+  const [validatingCma, setValidatingCma] = useState(false);
   const [injectLog, setInjectLog] = useState([]);
   const [copyStates, setCopyStates] = useState({});
   const [progress, setProgress] = useState(0);
@@ -239,6 +242,27 @@ export default function DataLayerTool({ onHome }) {
 
   function interactionKey(it) {
     return `${it.kind}|${it.event}|${(it.text || "").slice(0, 40)}|${it.href || ""}`;
+  }
+
+  async function validateCmaToken() {
+    if (!config.spaceId || !config.cmaToken) {
+      setCmaValidation(null);
+      return;
+    }
+    setValidatingCma(true);
+    try {
+      const r = await fetch(`${API_BASE}/contentful/validate-cma`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceId: config.spaceId, cmaToken: config.cmaToken })
+      });
+      const data = await r.json();
+      setCmaValidation(data);
+    } catch (e) {
+      setCmaValidation({ valid: false, message: e.message });
+    } finally {
+      setValidatingCma(false);
+    }
   }
 
   async function runScan() {
@@ -400,13 +424,63 @@ export default function DataLayerTool({ onHome }) {
   async function handleInject() {
     setInjecting(true);
     setInjectLog([]);
+    setInjectStats({ ok: 0, failed: 0, errors: [] });
     addLog("Initializing Contentful Management API connection...", "accent");
-    await new Promise(r => setTimeout(r, 600));
+
+    // Pre-flight: validate CMA token before processing 21 scripts
+    if (config.spaceId && config.cmaToken) {
+      addLog("Validating CMA token...", "info");
+      try {
+        const vRes = await fetch(`${API_BASE}/contentful/validate-cma`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ spaceId: config.spaceId, cmaToken: config.cmaToken })
+        });
+        const vData = await vRes.json();
+        if (!vData.valid) {
+          addLog(`\u2717 CMA validation FAILED: ${vData.message || vData.reason}`, "error");
+          addLog(`Status: ${vData.status} \u00B7 Reason: ${vData.reason}`, "error");
+          if (vData.reason === "unauthorized") {
+            addLog("Fix: get Personal Access Token at https://app.contentful.com/account/profile/cma_tokens", "error");
+            addLog("Paste it in CMA TOKEN field on Connect phase. Do NOT use CDA/CPA tokens.", "error");
+          }
+          setInjecting(false);
+          setInjectStats({ ok: 0, failed: scripts.length, errors: [{ ct: "validation", error: vData.message || vData.reason }] });
+          return;
+        }
+        addLog(`\u2713 CMA token valid \u00B7 space "${vData.space?.name || vData.space?.id}"`, "ok");
+        if (vData.bootstrapNeeded) {
+          addLog("\u26A0 dataLayerScript content model NOT found. Bootstrap will be attempted automatically.", "info");
+          try {
+            const bRes = await fetch(`${API_BASE}/contentful/bootstrap`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ spaceId: config.spaceId, cmaToken: config.cmaToken })
+            });
+            const bData = await bRes.json();
+            if (bData.success) addLog("\u2713 Bootstrap complete \u2014 content models created", "ok");
+            else addLog(`\u26A0 Bootstrap partial: ${JSON.stringify(bData.results?.map(r => `${r.id}:${r.error || "ok"}`))}`, "info");
+          } catch (e) {
+            addLog(`\u2717 Bootstrap failed: ${e.message}`, "error");
+          }
+        } else {
+          addLog("\u2713 dataLayerScript content model exists", "ok");
+        }
+      } catch (e) {
+        addLog(`\u2717 Validation request failed: ${e.message}`, "error");
+        setInjecting(false);
+        return;
+      }
+    }
+
+    let okCount = 0;
+    let failCount = 0;
+    const errors = [];
 
     for (let i = 0; i < scripts.length; i++) {
       const { ct, code } = scripts[i];
       addLog(`Processing \u2014 ${ct.name} (${ct.sys.id})`, "info");
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 200));
 
       if (config.spaceId && config.cmaToken) {
         try {
@@ -421,21 +495,38 @@ export default function DataLayerTool({ onHome }) {
               events: GA4_EVENT_MAP[ct.sys.id] || []
             })
           });
-          if (res.ok) addLog(`\u2713 Injected: ${ct.name}`, "ok");
-          else addLog(`\u26A0 CMA error ${res.status} for ${ct.name} \u2014 logged locally`, "info");
-        } catch {
-          addLog(`\u2713 Queued locally: ${ct.name} (no live CMA)`, "ok");
+          if (res.ok) {
+            const body = await res.json();
+            okCount++;
+            addLog(`\u2713 Injected: ${ct.name} \u00B7 entryId ${body.entryId || "(none)"}`, "ok");
+          } else {
+            failCount++;
+            const text = await res.text();
+            errors.push({ ct: ct.name, status: res.status, error: text.slice(0, 200) });
+            addLog(`\u2717 FAIL ${res.status}: ${ct.name} \u2014 ${text.slice(0, 100)}`, "error");
+          }
+        } catch (e) {
+          failCount++;
+          errors.push({ ct: ct.name, error: e.message });
+          addLog(`\u2717 Network error: ${ct.name} \u2014 ${e.message}`, "error");
         }
       } else {
-        addLog(`\u2713 Staged: ${ct.name} (demo mode)`, "ok");
+        okCount++;
+        addLog(`\u2713 Staged: ${ct.name} (demo mode \u2014 no CMA configured)`, "ok");
       }
     }
 
-    await new Promise(r => setTimeout(r, 400));
-    addLog("All scripts processed. GTM container ready for tag configuration.", "accent");
-    addLog(`Generated ${scripts.length} dataLayer scripts across ${scripts.reduce((a, s) => a + s.events.length, 0)} GA4 events.`, "ok");
+    await new Promise(r => setTimeout(r, 300));
+    if (okCount === scripts.length) {
+      addLog(`\u2713 ALL ${scripts.length} scripts injected successfully`, "ok");
+    } else if (okCount > 0) {
+      addLog(`\u26A0 PARTIAL: ${okCount}/${scripts.length} injected, ${failCount} failed`, "info");
+    } else {
+      addLog(`\u2717 INJECTION FAILED: 0/${scripts.length} succeeded, all ${failCount} errored`, "error");
+    }
+    setInjectStats({ ok: okCount, failed: failCount, errors });
     setInjecting(false);
-    setInjected(true);
+    setInjected(okCount > 0); // only set injected if at least one succeeded
   }
 
   function copyScript(idx) {
@@ -481,8 +572,29 @@ export default function DataLayerTool({ onHome }) {
             </div>
             <div className="field-row">
               <div>
-                <label>CMA TOKEN (write)</label>
-                <input type="password" placeholder="Content Management API token" value={config.cmaToken} onChange={e => setConfig(p => ({ ...p, cmaToken: e.target.value }))} />
+                <label>
+                  CMA TOKEN (write){" "}
+                  <a href="https://app.contentful.com/account/profile/cma_tokens" target="_blank" rel="noopener" style={{ fontSize: 10, color: "var(--accent)", marginLeft: 6 }}>get PAT →</a>
+                </label>
+                <input
+                  type="password"
+                  placeholder="Personal Access Token (NOT CDA/CPA)"
+                  value={config.cmaToken}
+                  onChange={e => { setConfig(p => ({ ...p, cmaToken: e.target.value })); setCmaValidation(null); }}
+                  onBlur={validateCmaToken}
+                />
+                {validatingCma && <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 4 }}><span className="spinner" /> Validating CMA token...</div>}
+                {cmaValidation && cmaValidation.valid && (
+                  <div style={{ fontSize: 11, color: "var(--ok, #4ade80)", marginTop: 4 }}>
+                    ✓ Valid · space "{cmaValidation.space?.name}"
+                    {cmaValidation.bootstrapNeeded && <span style={{ color: "var(--warn)", marginLeft: 8 }}>⚠ dataLayerScript model missing — auto-bootstrap on Inject</span>}
+                  </div>
+                )}
+                {cmaValidation && !cmaValidation.valid && (
+                  <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.4 }}>
+                    ✗ {cmaValidation.status || "?"} · {cmaValidation.message}
+                  </div>
+                )}
               </div>
               <div>
                 <label>GTM CONTAINER ID</label>
@@ -801,6 +913,12 @@ export default function DataLayerTool({ onHome }) {
         <>
           <p className="phase-title">Inject via Contentful API</p>
           <p className="phase-sub">Scripts will be pushed to Contentful via the Management API. Review before injecting.</p>
+          {cmaValidation && !cmaValidation.valid && (
+            <div className="status-row error" style={{ marginBottom: 12 }}>
+              <Icon name="x" /> CMA token invalid \u2014 Inject will fail. Go back to Connect, paste a valid Personal Access Token.
+              <a href="https://app.contentful.com/account/profile/cma_tokens" target="_blank" rel="noopener" style={{ marginLeft: 8, color: "var(--accent)" }}>Get PAT \u2192</a>
+            </div>
+          )}
           <div className="card">
             <div className="card-title"><span className="dot" />Injection Queue {"\u00B7"} {scripts.length} scripts</div>
             {scripts.map((s, i) => (
@@ -809,7 +927,9 @@ export default function DataLayerTool({ onHome }) {
                   <div className="inj-name">{s.ct.name}</div>
                   <div className="inj-status">{s.events.join(" \u00B7 ")} {"\u00B7"} {s.code.split("\n").length} lines</div>
                 </div>
-                <span className={`badge ${injected ? "badge-green" : "badge-blue"}`}>{injected ? "\u2713 Injected" : "Queued"}</span>
+                <span className={`badge ${injectStats.ok > 0 && i < injectStats.ok ? "badge-green" : injectStats.failed > 0 && i >= injectStats.ok ? "badge-red" : "badge-blue"}`}>
+                  {injecting ? "..." : injected && i < injectStats.ok ? "\u2713 Injected" : !injecting && injectStats.failed > 0 && i >= injectStats.ok ? "\u2717 Failed" : "Queued"}
+                </span>
               </div>
             ))}
           </div>
@@ -821,20 +941,39 @@ export default function DataLayerTool({ onHome }) {
               {injecting && <div className="log-line accent">[...] Processing<span className="spinner" style={{ display: "inline-block", marginLeft: 8, verticalAlign: "middle" }} /></div>}
             </div>
           )}
-          {injected && (
-            <div className="status-row success">
-              <Icon name="check" /> All {scripts.length} scripts injected {"\u00B7"} {scripts.reduce((a, s) => a + s.events.length, 0)} GA4 events configured
-            </div>
+          {!injecting && (injectStats.ok > 0 || injectStats.failed > 0) && (
+            <>
+              {injectStats.ok === scripts.length && injectStats.failed === 0 && (
+                <div className="status-row success">
+                  <Icon name="check" /> All {injectStats.ok} scripts injected successfully {"\u00B7"} {scripts.reduce((a, s) => a + s.events.length, 0)} GA4 events configured
+                </div>
+              )}
+              {injectStats.ok > 0 && injectStats.failed > 0 && (
+                <div className="status-row warn">
+                  <Icon name="warn" /> Partial: {injectStats.ok} injected, {injectStats.failed} failed. Check log for errors.
+                </div>
+              )}
+              {injectStats.ok === 0 && injectStats.failed > 0 && (
+                <div className="status-row error">
+                  <Icon name="x" /> Injection failed: 0/{scripts.length} succeeded. {injectStats.errors[0]?.error?.includes("401") || injectStats.errors[0]?.status === 401 ? "Token rejected (401). Get a Personal Access Token from Contentful Account Settings \u2192 CMA tokens." : "See log."}
+                </div>
+              )}
+            </>
           )}
           <div className="actions">
             <button className="btn btn-ghost" onClick={() => setPhase(2)}>{"\u2190"} Back</button>
             <div className="spacer" />
-            {!injected && (
-              <button className="btn btn-primary" onClick={handleInject} disabled={injecting}>
+            {(!injected || injectStats.failed > 0) && (
+              <button
+                className="btn btn-primary"
+                onClick={handleInject}
+                disabled={injecting || (cmaValidation && !cmaValidation.valid)}
+                title={cmaValidation && !cmaValidation.valid ? "CMA token invalid \u2014 fix on Connect phase" : ""}
+              >
                 {injecting ? <><span className="spinner" /> Injecting...</> : <><Icon name="inject" /> Inject {scripts.length} Scripts</>}
               </button>
             )}
-            {injected && <button className="btn btn-success" onClick={() => setPhase(4)}>Validate {"\u2192"}</button>}
+            {injected && injectStats.failed === 0 && <button className="btn btn-success" onClick={() => setPhase(4)}>Validate {"\u2192"}</button>}
           </div>
         </>
       )}

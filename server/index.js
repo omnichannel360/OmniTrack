@@ -203,6 +203,68 @@ app.get("/api/contentful/content-types", async (req, res) => {
   }
 });
 
+// Validate CMA token: hits Contentful /spaces/{id} with token. Returns auth status + space info or precise error.
+app.post("/api/contentful/validate-cma", async (req, res) => {
+  const { spaceId, cmaToken } = req.body;
+  if (!spaceId || !cmaToken) {
+    return res.status(400).json({ valid: false, error: "spaceId and cmaToken are required" });
+  }
+
+  try {
+    const r = await fetch(`https://api.contentful.com/spaces/${encodeURIComponent(spaceId)}`, {
+      headers: { "Authorization": `Bearer ${cmaToken}` }
+    });
+
+    if (r.status === 401) {
+      return res.json({
+        valid: false,
+        status: 401,
+        reason: "unauthorized",
+        message: "Token rejected by Contentful. Likely cause: pasted CDA/CPA token in CMA field. CMA needs a Personal Access Token (PAT) from https://app.contentful.com/account/profile/cma_tokens"
+      });
+    }
+    if (r.status === 404) {
+      return res.json({
+        valid: false,
+        status: 404,
+        reason: "space_not_found",
+        message: `Space '${spaceId}' not found or token has no access to it.`
+      });
+    }
+    if (!r.ok) {
+      const text = await r.text();
+      return res.json({ valid: false, status: r.status, reason: "contentful_error", message: text.slice(0, 300) });
+    }
+
+    const space = await r.json();
+
+    // Also test write capability — list content types (read scope minimum)
+    let writeCapable = false;
+    let dataLayerScriptModelExists = false;
+    try {
+      const ctRes = await fetch(`https://api.contentful.com/spaces/${encodeURIComponent(spaceId)}/environments/master/content_types`, {
+        headers: { "Authorization": `Bearer ${cmaToken}` }
+      });
+      if (ctRes.ok) {
+        writeCapable = true; // CMA endpoint reachable + token has access; entries POST should work
+        const ctData = await ctRes.json();
+        dataLayerScriptModelExists = (ctData.items || []).some(ct => ct.sys?.id === "dataLayerScript");
+      }
+    } catch {}
+
+    res.json({
+      valid: true,
+      status: 200,
+      space: { id: space.sys?.id, name: space.name, organizationId: space.sys?.organization?.sys?.id },
+      writeCapable,
+      dataLayerScriptModelExists,
+      bootstrapNeeded: !dataLayerScriptModelExists
+    });
+  } catch (err) {
+    res.status(500).json({ valid: false, reason: "network", message: err.message });
+  }
+});
+
 // Proxy: Contentful CMA - inject script entry
 app.post("/api/contentful/inject", async (req, res) => {
   const { spaceId, cmaToken, contentTypeId, scriptCode, events } = req.body;
