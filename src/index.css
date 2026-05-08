@@ -284,3 +284,120 @@ pre {
 }
 .entry-row .entry-title { color: #E8EDF5; font-weight: 500; }
 .entry-row .entry-id { font-family: var(--mono); color: var(--text3); font-size: 11px; }
+
+/* ============================================
+   Discover-phase tabs + live website scanner
+   ============================================ */
+.discover-tabs {
+  display: flex; gap: 4px; margin-bottom: 16px;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 4px;
+}
+.disc-tab {
+  flex: 1; display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border: none; border-radius: 8px;
+  background: transparent; color: var(--text2);
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: all 0.15s ease;
+}
+.disc-tab:hover { color: #E8EDF5; }
+.disc-tab.active {
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--accent);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+}
+.disc-tab-count {
+  margin-left: auto; padding: 2px 8px;
+  background: rgba(255,255,255,0.06); border-radius: 10px;
+  font-family: var(--mono); font-size: 10px;
+}
+.disc-tab.active .disc-tab-count {
+  background: rgba(0, 229, 255, 0.15); color: var(--accent);
+}
+
+.event-tag.clickable { cursor: pointer; transition: all 0.15s ease; }
+.event-tag.clickable:hover { background: rgba(123,97,255,0.18); color: #C4B5FD; }
+.event-tag.active { background: rgba(0,229,255,0.18); color: var(--accent); border-color: rgba(0,229,255,0.4); }
+
+.interaction-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 480px; overflow-y: auto;
+  margin-top: 8px;
+}
+.interaction-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 10px 12px; background: var(--bg2);
+  border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: all 0.12s ease;
+}
+.interaction-row:hover { border-color: rgba(0,229,255,0.3); background: rgba(0,229,255,0.03); }
+.interaction-row.selected {
+  border-color: var(--accent);
+  background: rgba(0,229,255,0.05);
+}
+.ix-check {
+  flex: 0 0 18px; height: 18px;
+  border: 1px solid var(--border); border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--accent); font-weight: 600;
+  margin-top: 2px;
+}
+.interaction-row.selected .ix-check {
+  background: var(--accent); color: var(--bg);
+  border-color: var(--accent);
+}
+.ix-main { flex: 1; min-width: 0; }
+.ix-text {
+  font-size: 13px; color: #E8EDF5; font-weight: 500;
+  margin-bottom: 6px; word-break: break-word;
+}
+.ix-meta {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  font-size: 11px;
+}
+.ix-meta code {
+  background: rgba(255,255,255,0.04); padding: 2px 6px;
+  border-radius: 4px; font-family: var(--mono);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.status-row.warn {
+  background: rgba(255,181,71,0.08);
+  border: 1px solid rgba(255,181,71,0.25);
+  color: var(--warn);
+}
+
+/* Scanner engine tier selector */
+.engine-tier-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+.engine-tier {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px;
+  cursor: pointer; text-align: left;
+  color: var(--text); transition: all 0.15s ease;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.engine-tier:hover:not(.disabled) { border-color: rgba(0,229,255,0.3); }
+.engine-tier.active {
+  border-color: var(--accent);
+  background: rgba(0,229,255,0.06);
+}
+.engine-tier.disabled { opacity: 0.45; cursor: not-allowed; }
+.engine-tier.stub { border-style: dashed; opacity: 0.7; }
+.engine-tier .et-num {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  background: rgba(123,97,255,0.15); color: #C4B5FD;
+  padding: 2px 6px; border-radius: 4px; align-self: flex-start;
+  letter-spacing: 0.5px; font-weight: 600;
+}
+.engine-tier.active .et-num { background: rgba(0,229,255,0.18); color: var(--accent); }
+.engine-tier .et-name { font-size: 13px; font-weight: 600; color: #E8EDF5; }
+.engine-tier .et-desc { font-size: 11px; color: var(--text3); line-height: 1.4; }
+
+.ai-cost-badge {
+  background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.2);
+  color: var(--accent); padding: 4px 10px; border-radius: 6px;
+  font-size: 11px; font-family: var(--mono);
+}

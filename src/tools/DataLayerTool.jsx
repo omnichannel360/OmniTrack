@@ -24,6 +24,67 @@ const DEMO_CONTENT_TYPES = [
   { sys: { id: "promoPage" }, name: "Promo / Offer Page", description: "Special offers and deals", fields: [{ id: "promoTitle" }, { id: "discount" }, { id: "promoCode" }, { id: "expiry" }] },
 ];
 
+function generateInteractionScript(interactions, gtmId) {
+  if (!interactions.length) return "";
+  const groups = {};
+  for (const it of interactions) {
+    if (!groups[it.event]) groups[it.event] = [];
+    groups[it.event].push(it);
+  }
+
+  const handlers = Object.entries(groups).map(([event, items]) => {
+    const selectors = [...new Set(items.map(i => i.selector))].join(", ");
+    const itemsMeta = items.slice(0, 5).map(i => ({ text: i.text, selector: i.selector, page: i.pages?.[0] || i.pageUrl }));
+    return `  // ${event} -- ${items.length} matched element${items.length === 1 ? "" : "s"}
+  // Examples: ${itemsMeta.map(m => JSON.stringify(m.text)).join(", ")}
+  document.querySelectorAll(${JSON.stringify(selectors)}).forEach(function(el) {
+    el.addEventListener("click", function(ev) {
+      var label = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 100);
+      window.dataLayer.push({
+        event: ${JSON.stringify(event)},
+        interaction_type: "click",
+        element_text: label,
+        element_selector: ${JSON.stringify(selectors)},
+        page_location: window.location.href,
+        page_path: window.location.pathname
+      });
+    });
+  });`;
+  });
+
+  return `/* =========================================
+ * OmniTrack - Live Website Interactions
+ * Discovered: ${interactions.length} interaction${interactions.length === 1 ? "" : "s"}
+ * Events: ${Object.keys(groups).join(", ")}
+ * GTM Container: ${gtmId || "(set in Connect step)"}
+ * Generated: ${new Date().toISOString()}
+ * =========================================
+ */
+(function() {
+  "use strict";
+  window.dataLayer = window.dataLayer || [];
+
+  function attachListeners() {
+${handlers.join("\n\n")}
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", attachListeners);
+  } else {
+    attachListeners();
+  }
+
+  // Re-attach on SPA route changes (Next.js, etc.)
+  var lastPath = window.location.pathname;
+  setInterval(function() {
+    if (window.location.pathname !== lastPath) {
+      lastPath = window.location.pathname;
+      setTimeout(attachListeners, 500);
+    }
+  }, 1000);
+})();`;
+}
+
 function generateDataLayerScript(ct, events) {
   const id = ct.sys.id;
   const fieldNames = ct.fields.map(f => f.id);
@@ -147,12 +208,108 @@ export default function DataLayerTool({ onHome }) {
   const [progress, setProgress] = useState(0);
   const logRef = useRef(null);
 
+  // Discover phase: tabs + live website scanner state
+  const [discoverTab, setDiscoverTab] = useState("contentTypes"); // "contentTypes" | "liveSite"
+  const [scanUrl, setScanUrl] = useState("https://www.credomobile.com");
+  const [scanMode, setScanMode] = useState("sitemap"); // "sitemap" | "single" | "list"
+  const [scanCustomList, setScanCustomList] = useState("");
+  const [scanEngine, setScanEngine] = useState("auto"); // "auto" | "cheerio" | "chromium" | "ai" | "omnibot"
+  const [capabilities, setCapabilities] = useState(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
+  const [scanResult, setScanResult] = useState(null);
+  const [scanError, setScanError] = useState("");
+  const [interactionFilter, setInteractionFilter] = useState("all"); // "all" | event name
+  const [selectedInteractions, setSelectedInteractions] = useState({}); // key -> bool
+
+  useEffect(() => {
+    fetch(`${API_BASE}/website/capabilities`).then(r => r.json()).then(d => {
+      setCapabilities(d);
+    }).catch(() => setCapabilities({ playwrightAvailable: false, aiAvailable: false, omnibotAvailable: false }));
+  }, []);
+
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [injectLog]);
 
   function addLog(msg, type = "info") {
     setInjectLog(prev => [...prev, { msg, type, ts: Date.now() }]);
+  }
+
+  function interactionKey(it) {
+    return `${it.kind}|${it.event}|${(it.text || "").slice(0, 40)}|${it.href || ""}`;
+  }
+
+  async function runScan() {
+    setScanning(true);
+    setScanError("");
+    setScanResult(null);
+    setScanProgress({ done: 0, total: 0 });
+    try {
+      let urls = [];
+      if (scanMode === "single") {
+        urls = [scanUrl];
+      } else if (scanMode === "list") {
+        urls = scanCustomList.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        if (!urls.length) throw new Error("Paste at least one URL");
+      } else {
+        setDiscovering(true);
+        const dr = await fetch(`${API_BASE}/website/discover-sitemap`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: scanUrl })
+        });
+        setDiscovering(false);
+        const dd = await dr.json();
+        if (!dr.ok) throw new Error(dd.error || `Sitemap discovery failed (${dr.status})`);
+        urls = dd.urls || [];
+        if (!urls.length) throw new Error("No URLs discovered. Try Single URL or Custom List mode.");
+      }
+
+      setScanProgress({ done: 0, total: urls.length });
+
+      let endpoint = "/website/scan-batch";
+      let payload = { urls };
+      if (scanEngine === "auto") {
+        payload = { urls, autoFallback: true };
+      } else if (scanEngine === "cheerio") {
+        payload = { urls, autoFallback: false };
+      } else if (scanEngine === "chromium") {
+        payload = { urls, usePlaywright: true };
+      } else if (scanEngine === "ai") {
+        endpoint = "/website/scan-ai";
+        payload = { urls, useChromium: capabilities?.playwrightAvailable };
+      } else if (scanEngine === "omnibot") {
+        endpoint = "/website/scan-omnibot";
+        payload = { urls };
+      }
+
+      const r = await fetch(`${API_BASE}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        if (r.status === 501) throw new Error(`${data.error}: ${data.message || ""}`);
+        throw new Error(data.error || `Scan failed (${r.status})`);
+      }
+
+      setScanResult(data);
+      const sel = {};
+      (data.interactions || []).forEach(it => {
+        if (it.eventConfidence === "high" || it.eventConfidence === "explicit") {
+          sel[interactionKey(it)] = true;
+        }
+      });
+      setSelectedInteractions(sel);
+    } catch (e) {
+      setScanError(e.message);
+    } finally {
+      setScanning(false);
+      setDiscovering(false);
+    }
   }
 
   async function handleConnect() {
@@ -192,17 +349,35 @@ export default function DataLayerTool({ onHome }) {
     setScripts([]);
     setProgress(0);
     const selectedCTs = contentTypes.filter(ct => selected[ct.sys.id]);
-    const total = selectedCTs.length;
+    const liveInteractions = (scanResult?.interactions || []).filter(it => selectedInteractions[interactionKey(it)]);
+    const total = selectedCTs.length + (liveInteractions.length > 0 ? 1 : 0);
     const results = [];
+    let stepIdx = 0;
+
     for (let i = 0; i < selectedCTs.length; i++) {
       const ct = selectedCTs[i];
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 200));
       const events = GA4_EVENT_MAP[ct.sys.id] || GA4_EVENT_MAP.blogPost;
       const code = generateDataLayerScript(ct, events);
-      results.push({ ct, events, code });
-      setProgress(Math.round(((i + 1) / total) * 100));
+      results.push({ ct, events, code, kind: "contentType" });
+      stepIdx++;
+      setProgress(Math.round((stepIdx / total) * 100));
       setScripts([...results]);
     }
+
+    if (liveInteractions.length > 0) {
+      await new Promise(r => setTimeout(r, 200));
+      const code = generateInteractionScript(liveInteractions, config.gtmId);
+      const events = [...new Set(liveInteractions.map(i => i.event))];
+      results.push({
+        ct: { sys: { id: "liveSiteInteractions" }, name: `Live Site Interactions (${liveInteractions.length})` },
+        events, code, kind: "liveSite", interactions: liveInteractions
+      });
+      stepIdx++;
+      setProgress(100);
+      setScripts([...results]);
+    }
+
     setGenerating(false);
   }
 
@@ -318,34 +493,208 @@ export default function DataLayerTool({ onHome }) {
 
       {phase === 1 && (
         <>
-          <p className="phase-title">Discover Content Types</p>
-          <p className="phase-sub">Select which Contentful content types need GA4 data layer coverage.</p>
-          <div className="card">
-            <div className="card-title" style={{ marginBottom: 8 }}>
-              <span className="dot" />Content Types
-              <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--mono)", color: "var(--text2)" }}>{selectedCount} / {contentTypes.length} selected</span>
-            </div>
-            <div className="content-type-grid">
-              {contentTypes.map(ct => {
-                const events = GA4_EVENT_MAP[ct.sys.id] || ["page_view"];
-                return (
-                  <div key={ct.sys.id} className={`ct-card ${selected[ct.sys.id] ? "selected" : ""}`} onClick={() => setSelected(p => ({ ...p, [ct.sys.id]: !p[ct.sys.id] }))}>
-                    <div className="ct-check">{selected[ct.sys.id] ? "\u2713" : ""}</div>
-                    <div className="ct-name">{ct.name}</div>
-                    <div className="ct-id">{ct.sys.id}</div>
-                    <div className="ct-fields">{ct.fields?.length || 0} fields {"\u00B7"} {ct.description || "No description"}</div>
-                    <div className="event-tags">{events.map(e => <span className="event-tag" key={e}>{e}</span>)}</div>
-                  </div>
-                );
-              })}
-            </div>
+          <p className="phase-title">Discover</p>
+          <p className="phase-sub">Pick what to track: Contentful content types and/or live website interactions.</p>
+
+          <div className="discover-tabs">
+            <button className={`disc-tab ${discoverTab === "contentTypes" ? "active" : ""}`} onClick={() => setDiscoverTab("contentTypes")}>
+              <Icon name="code" /> Content Types
+              <span className="disc-tab-count">{selectedCount}/{contentTypes.length}</span>
+            </button>
+            <button className={`disc-tab ${discoverTab === "liveSite" ? "active" : ""}`} onClick={() => setDiscoverTab("liveSite")}>
+              <Icon name="search" /> Live Website Scanner
+              <span className="disc-tab-count">{Object.values(selectedInteractions).filter(Boolean).length}{scanResult ? `/${scanResult.uniqueInteractions}` : ""}</span>
+            </button>
           </div>
+
+          {discoverTab === "contentTypes" && (
+            <div className="card">
+              <div className="card-title" style={{ marginBottom: 8 }}>
+                <span className="dot" />Content Types
+                <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--mono)", color: "var(--text2)" }}>{selectedCount} / {contentTypes.length} selected</span>
+              </div>
+              <div className="content-type-grid">
+                {contentTypes.map(ct => {
+                  const events = GA4_EVENT_MAP[ct.sys.id] || ["page_view"];
+                  return (
+                    <div key={ct.sys.id} className={`ct-card ${selected[ct.sys.id] ? "selected" : ""}`} onClick={() => setSelected(p => ({ ...p, [ct.sys.id]: !p[ct.sys.id] }))}>
+                      <div className="ct-check">{selected[ct.sys.id] ? "\u2713" : ""}</div>
+                      <div className="ct-name">{ct.name}</div>
+                      <div className="ct-id">{ct.sys.id}</div>
+                      <div className="ct-fields">{ct.fields?.length || 0} fields {"\u00B7"} {ct.description || "No description"}</div>
+                      <div className="event-tags">{events.map(e => <span className="event-tag" key={e}>{e}</span>)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {discoverTab === "liveSite" && (
+            <>
+              <div className="card">
+                <div className="card-title"><span className="dot" />Crawl Configuration</div>
+                <div className="field-row">
+                  <div style={{ flex: 2 }}>
+                    <label>WEBSITE URL</label>
+                    <input type="text" placeholder="https://www.credomobile.com" value={scanUrl} onChange={e => setScanUrl(e.target.value)} />
+                  </div>
+                  <div>
+                    <label>CRAWL MODE</label>
+                    <select value={scanMode} onChange={e => setScanMode(e.target.value)} style={{ width: "100%", padding: "10px 12px", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, color: "#E8EDF5", fontFamily: "var(--mono)", fontSize: 12 }}>
+                      <option value="sitemap">Sitemap auto-discover</option>
+                      <option value="single">Single URL only</option>
+                      <option value="list">Custom URL list</option>
+                    </select>
+                  </div>
+                </div>
+                {scanMode === "list" && (
+                  <div style={{ marginTop: 12 }}>
+                    <label>URL LIST (one per line)</label>
+                    <textarea rows={5} placeholder={"https://www.credomobile.com/plan\nhttps://www.credomobile.com/shop"} value={scanCustomList} onChange={e => setScanCustomList(e.target.value)} style={{ width: "100%", padding: 10, background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, color: "#E8EDF5", fontFamily: "var(--mono)", fontSize: 12 }} />
+                  </div>
+                )}
+
+                <div style={{ marginTop: 14 }}>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 11, color: "var(--text2)", fontFamily: "var(--mono)", letterSpacing: 0.4 }}>SCAN ENGINE (TIER)</label>
+                  <div className="engine-tier-grid">
+                    <button className={`engine-tier ${scanEngine === "auto" ? "active" : ""}`} onClick={() => setScanEngine("auto")}>
+                      <div className="et-num">1+2</div>
+                      <div className="et-name">Auto (Cheerio\u2192Chromium)</div>
+                      <div className="et-desc">Fast HTML parser, auto-upgrade to headless browser if SPA detected</div>
+                    </button>
+                    <button className={`engine-tier ${scanEngine === "cheerio" ? "active" : ""}`} onClick={() => setScanEngine("cheerio")}>
+                      <div className="et-num">1</div>
+                      <div className="et-name">Cheerio Only</div>
+                      <div className="et-desc">Pure HTML regex. Misses CSR pages. Fastest.</div>
+                    </button>
+                    <button className={`engine-tier ${scanEngine === "chromium" ? "active" : ""} ${!capabilities?.playwrightAvailable ? "disabled" : ""}`} disabled={!capabilities?.playwrightAvailable} onClick={() => setScanEngine("chromium")}>
+                      <div className="et-num">2</div>
+                      <div className="et-name">Chromium (Playwright)</div>
+                      <div className="et-desc">Headless browser. Full DOM after JS. {capabilities && !capabilities.playwrightAvailable && <span style={{ color: "var(--warn)" }}>not installed</span>}</div>
+                    </button>
+                    <button className={`engine-tier ${scanEngine === "ai" ? "active" : ""} ${!capabilities?.aiAvailable ? "disabled" : ""}`} disabled={!capabilities?.aiAvailable} onClick={() => setScanEngine("ai")}>
+                      <div className="et-num">3</div>
+                      <div className="et-name">AI Agent (Haiku)</div>
+                      <div className="et-desc">Claude classifies elements by semantic intent. {capabilities && !capabilities.aiAvailable && <span style={{ color: "var(--warn)" }}>set ANTHROPIC_API_KEY</span>}</div>
+                    </button>
+                    <button className={`engine-tier ${scanEngine === "omnibot" ? "active" : ""} ${!capabilities?.omnibotAvailable ? "stub" : ""}`} onClick={() => setScanEngine("omnibot")}>
+                      <div className="et-num">4</div>
+                      <div className="et-name">OmniBot Crawl</div>
+                      <div className="et-desc">{capabilities?.omnibotAvailable ? "Deep code parser + crawl" : "Pending integration (set OMNIBOT_ENDPOINT)"}</div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {scanError && <div className="status-row error"><Icon name="x" /> {scanError}</div>}
+
+              {(scanning || discovering) && (
+                <div className="card">
+                  <div className="card-title"><span className="spinner" /> {discovering ? "Discovering URLs..." : `Scanning pages (${scanProgress.done}/${scanProgress.total})...`}</div>
+                  {scanProgress.total > 0 && (
+                    <>
+                      <div className="progress-bar-wrap"><div className="progress-bar" style={{ width: `${(scanProgress.done / scanProgress.total) * 100}%` }} /></div>
+                      <div className="progress-label">{scanProgress.done} / {scanProgress.total} pages</div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {scanResult && (
+                <>
+                  <div className="status-row success">
+                    <Icon name="check" /> {scanResult.pagesScanned} pages scanned {"\u00B7"} {scanResult.uniqueInteractions} unique interactions {"\u00B7"} {scanResult.totalInteractionsRaw} raw clicks
+                    {scanResult.pagesFailed > 0 && <span style={{ color: "var(--warn)", marginLeft: 12 }}> {"\u00B7"} {scanResult.pagesFailed} failed</span>}
+                    {scanResult.aiUsage && (
+                      <span className="ai-cost-badge" style={{ marginLeft: "auto" }}>
+                        AI {"\u00B7"} {scanResult.aiUsage.totalInputTokens?.toLocaleString()} in {"\u00B7"} {scanResult.aiUsage.totalOutputTokens?.toLocaleString()} out {"\u00B7"} ${scanResult.aiUsage.estimatedCostUsd?.toFixed(4) || "0.0000"}
+                      </span>
+                    )}
+                  </div>
+
+                  {scanResult.spaShellWarning && (
+                    <div className="status-row warn">
+                      <Icon name="warn" /> {scanResult.spaShellWarning}
+                    </div>
+                  )}
+
+                  <div className="card">
+                    <div className="card-title">
+                      <span className="dot" />Event Breakdown
+                      <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--mono)", color: "var(--text2)" }}>
+                        {Object.values(selectedInteractions).filter(Boolean).length} of {scanResult.uniqueInteractions} selected
+                      </span>
+                    </div>
+                    <div className="event-tags" style={{ marginBottom: 8 }}>
+                      <span className={`event-tag clickable ${interactionFilter === "all" ? "active" : ""}`} onClick={() => setInteractionFilter("all")}>all ({scanResult.uniqueInteractions})</span>
+                      {Object.entries(scanResult.eventCounts || {}).sort((a, b) => b[1] - a[1]).map(([ev, n]) => (
+                        <span key={ev} className={`event-tag clickable ${interactionFilter === ev ? "active" : ""}`} onClick={() => setInteractionFilter(ev)}>{ev} ({n})</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="card-title">
+                      <span className="dot" />Discovered Interactions
+                      <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                        <button className="copy-btn" onClick={() => {
+                          const sel = {}; (scanResult.interactions || []).forEach(it => sel[interactionKey(it)] = true); setSelectedInteractions(sel);
+                        }}>Select All</button>
+                        <button className="copy-btn" onClick={() => setSelectedInteractions({})}>Clear All</button>
+                        <button className="copy-btn" onClick={() => {
+                          const sel = {}; (scanResult.interactions || []).filter(it => it.eventConfidence === "high" || it.eventConfidence === "explicit").forEach(it => sel[interactionKey(it)] = true); setSelectedInteractions(sel);
+                        }}>High Confidence Only</button>
+                      </span>
+                    </div>
+                    <div className="interaction-list">
+                      {(scanResult.interactions || []).filter(it => interactionFilter === "all" || it.event === interactionFilter).map((it, idx) => {
+                        const k = interactionKey(it);
+                        return (
+                          <div key={k + idx} className={`interaction-row ${selectedInteractions[k] ? "selected" : ""}`} onClick={() => setSelectedInteractions(p => ({ ...p, [k]: !p[k] }))}>
+                            <div className="ix-check">{selectedInteractions[k] ? "\u2713" : ""}</div>
+                            <div className="ix-main">
+                              <div className="ix-text">{it.text || <span style={{ color: "var(--text3)", fontStyle: "italic" }}>(no text){it.href ? ` ${it.href.slice(0, 40)}` : ""}</span>}</div>
+                              <div className="ix-meta">
+                                <span className="badge badge-purple">{it.event}</span>
+                                <span className="badge">{it.kind}</span>
+                                <span className="badge badge-blue">{it.eventConfidence}</span>
+                                {it.occurrences > 1 && <span className="badge badge-green">{it.occurrences}x</span>}
+                                {it.source === "ai" && <span className="badge" style={{ background: "rgba(0,229,255,0.12)", color: "var(--accent)" }}>AI</span>}
+                                <code style={{ fontSize: 10, color: "var(--text3)" }}>{it.selector}</code>
+                              </div>
+                              {it.aiReasoning && (
+                                <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 4, fontStyle: "italic" }}>{"💭"} {it.aiReasoning}</div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div className="actions">
+                <button className="btn btn-primary" onClick={runScan} disabled={scanning || discovering || !scanUrl}>
+                  {scanning || discovering ? <><span className="spinner" /> Scanning...</> : <><Icon name="search" /> Run Scan</>}
+                </button>
+              </div>
+            </>
+          )}
+
           <div className="actions">
             <button className="btn btn-ghost" onClick={() => setPhase(0)}>{"\u2190"} Back</button>
-            <button className="btn btn-ghost" onClick={() => { const s = {}; contentTypes.forEach(ct => s[ct.sys.id] = true); setSelected(s); }}>Select All</button>
-            <button className="btn btn-ghost" onClick={() => setSelected({})}>Clear All</button>
+            {discoverTab === "contentTypes" && (
+              <>
+                <button className="btn btn-ghost" onClick={() => { const s = {}; contentTypes.forEach(ct => s[ct.sys.id] = true); setSelected(s); }}>Select All</button>
+                <button className="btn btn-ghost" onClick={() => setSelected({})}>Clear All</button>
+              </>
+            )}
             <div className="spacer" />
-            <button className="btn btn-primary" disabled={selectedCount === 0} onClick={() => setPhase(2)}>Generate Scripts for {selectedCount} Types {"\u2192"}</button>
+            <button className="btn btn-primary" disabled={selectedCount === 0 && Object.values(selectedInteractions).filter(Boolean).length === 0} onClick={() => setPhase(2)}>
+              Generate Scripts {"\u2192"} {selectedCount > 0 && `${selectedCount} type${selectedCount === 1 ? "" : "s"}`}{selectedCount > 0 && Object.values(selectedInteractions).filter(Boolean).length > 0 && " + "}{Object.values(selectedInteractions).filter(Boolean).length > 0 && `${Object.values(selectedInteractions).filter(Boolean).length} interactions`}
+            </button>
           </div>
         </>
       )}

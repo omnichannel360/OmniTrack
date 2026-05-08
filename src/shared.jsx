@@ -6,7 +6,7 @@ export function Icon({ name, size = 14 }) {
   const icons = {
     check: "\u2713", x: "\u2717", dot: "\u25CF", arrow: "\u2192", copy: "\u29C7",
     plug: "\u26A1", code: "</>", inject: "\u2B95", download: "\u2B07", refresh: "\u27BA",
-    back: "\u2190", home: "\u2302", search: "\u2315", tag: "\u25B6"
+    back: "\u2190", home: "\u2302", search: "\u2315", tag: "\u25B6", warn: "\u26A0"
   };
   return <span style={{ fontSize: size }}>{icons[name] || "?"}</span>;
 }

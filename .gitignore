@@ -24,3 +24,8 @@ dist-ssr
 *.sw?
 .env
 .claude-dev-helper
+
+# Server runtime logs
+omnitrack.log
+omnitrack.err
+*.err

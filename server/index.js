@@ -1,7 +1,10 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { discoverSitemap, scanPage, scanPages, isPlaywrightAvailable, fetchWithTimeout } from "./scanner.js";
+import { classifyPages, clearAiCache } from "./aiClassifier.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -322,6 +325,146 @@ app.post("/api/contentful/inject-schema", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Website scanner: discover sitemap.xml and return URL list
+app.post("/api/website/discover-sitemap", async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "url is required" });
+  try {
+    const out = await discoverSitemap(url);
+    res.json({ success: true, ...out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Website scanner: scan a single page
+app.post("/api/website/scan-page", async (req, res) => {
+  const { url, usePlaywright, autoFallback } = req.body;
+  if (!url) return res.status(400).json({ error: "url is required" });
+  try {
+    const out = await scanPage(url, { usePlaywright, autoFallback });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Website scanner: scan multiple pages and aggregate
+app.post("/api/website/scan-batch", async (req, res) => {
+  const { urls, usePlaywright, autoFallback } = req.body;
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "urls array is required" });
+  }
+  try {
+    const out = await scanPages(urls, null, { usePlaywright, autoFallback });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Capability check
+app.get("/api/website/capabilities", async (_req, res) => {
+  res.json({
+    playwrightAvailable: await isPlaywrightAvailable(),
+    aiAvailable: !!process.env.ANTHROPIC_API_KEY,
+    aiModel: "claude-haiku-4-5-20251001",
+    omnibotAvailable: !!process.env.OMNIBOT_ENDPOINT,
+    maxPages: 50,
+    maxInteractionsPerPage: 200
+  });
+});
+
+// Tier 3: AI Agent scan (Claude Haiku classifies elements with semantic intent)
+app.post("/api/website/scan-ai", async (req, res) => {
+  const { urls, apiKey, useChromium } = req.body;
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "urls array required" });
+  }
+  const key = apiKey || process.env.ANTHROPIC_API_KEY;
+  if (!key) return res.status(400).json({ error: "ANTHROPIC_API_KEY not set on server and none provided in request" });
+
+  let browser = null;
+  let context = null;
+  try {
+    if (useChromium) {
+      try {
+        const pw = await import("playwright");
+        browser = await pw.chromium.launch({ headless: true });
+        context = await browser.newContext({
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+        });
+      } catch (e) {
+        browser = null; context = null;
+      }
+    }
+
+    const fetchHtml = async (u) => {
+      if (context) {
+        const page = await context.newPage();
+        try {
+          await page.goto(u, { waitUntil: "domcontentloaded", timeout: 30000 });
+          // Settle: wait for body + brief idle for SPA hydration
+          await page.waitForLoadState("load", { timeout: 10000 }).catch(() => {});
+          await page.waitForTimeout(1500);
+          return await page.content();
+        } finally {
+          await page.close().catch(() => {});
+        }
+      }
+      const r = await fetchWithTimeout(u);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.text();
+    };
+
+    const out = await classifyPages(urls, fetchHtml, { apiKey: key });
+    res.json({ success: true, ...out, engineUsed: context ? "chromium+ai" : "fetch+ai" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (context) await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+  }
+});
+
+// Tier 4: OmniBot stub (real integration pending — set OMNIBOT_ENDPOINT env var)
+app.post("/api/website/scan-omnibot", async (req, res) => {
+  const { urls } = req.body;
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "urls array required" });
+  }
+  const endpoint = process.env.OMNIBOT_ENDPOINT;
+  if (!endpoint) {
+    return res.status(501).json({
+      error: "OmniBot integration pending",
+      message: "Set OMNIBOT_ENDPOINT env var (and OMNIBOT_API_KEY if needed) to enable Tier 4 deep crawl. For now use AI Agent tier.",
+      stub: true,
+      requestedUrls: urls.length
+    });
+  }
+  try {
+    const r = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(process.env.OMNIBOT_API_KEY ? { "Authorization": `Bearer ${process.env.OMNIBOT_API_KEY}` } : {})
+      },
+      body: JSON.stringify({ urls })
+    });
+    if (!r.ok) return res.status(r.status).json({ error: `OmniBot returned ${r.status}` });
+    const data = await r.json();
+    res.json({ success: true, engine: "omnibot", ...data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear AI cache (for testing / re-classifying)
+app.post("/api/website/clear-ai-cache", (_req, res) => {
+  clearAiCache();
+  res.json({ success: true });
 });
 
 // SPA fallback - serve index.html for all non-API routes
