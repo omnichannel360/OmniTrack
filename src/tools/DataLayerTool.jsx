@@ -599,12 +599,21 @@ export default function DataLayerTool({ onHome }) {
                 {cmaValidation && !cmaValidation.valid && (
                   <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.5 }}>
                     ✗ {cmaValidation.status || "?"} · {cmaValidation.message}
-                    {cmaValidation.tokenFormat === "pat" && cmaValidation.status === 401 && (
+                    {cmaValidation.reason === "org_grant_required" && (
+                      <div style={{ marginTop: 6, color: "var(--warn)", padding: "8px 10px", background: "rgba(255,181,71,0.1)", border: "1px solid rgba(255,181,71,0.3)", borderRadius: 4, lineHeight: 1.6 }}>
+                        <strong>🔑 Organization grant required.</strong> Token is real, but not authorized for this space's org.<br />
+                        <strong>Fix (60s):</strong><br />
+                        1. Open <a href="https://app.contentful.com/account/profile/cma_tokens" target="_blank" rel="noopener" style={{ color: "var(--accent)" }}>Contentful CMA tokens page</a><br />
+                        2. Find your token row → click <strong>Authorize</strong> button on the right<br />
+                        3. Pick the org that owns space "<code>{config.spaceId}</code>"<br />
+                        4. Come back, blur this field again to revalidate
+                      </div>
+                    )}
+                    {cmaValidation.tokenFormat === "pat" && cmaValidation.reason !== "org_grant_required" && cmaValidation.status === 401 && (
                       <div style={{ marginTop: 6, color: "var(--warn)", padding: "6px 8px", background: "rgba(255,181,71,0.08)", border: "1px solid rgba(255,181,71,0.2)", borderRadius: 4 }}>
-                        <strong>PAT detected but rejected.</strong> Check on Contentful CMA tokens page:<br />
-                        1. Click <strong>Authorize</strong> button next to your token (newer Contentful security)<br />
-                        2. Verify token not expired/revoked<br />
-                        3. Confirm token name matches the one you pasted
+                        <strong>PAT format OK but rejected.</strong> Check on Contentful CMA tokens page:<br />
+                        1. Click <strong>Authorize</strong> next to your token<br />
+                        2. Verify not expired/revoked
                       </div>
                     )}
                   </div>

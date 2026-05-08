@@ -225,9 +225,22 @@ app.post("/api/contentful/validate-cma", async (req, res) => {
     });
 
     if (r.status === 401) {
+      // Parse Contentful error body for specific error ID
+      let cfErrorId = null;
+      let cfMessage = null;
+      try {
+        const body = await r.clone().json();
+        cfErrorId = body.sys?.id;
+        cfMessage = body.message;
+      } catch {}
+
       let message;
-      if (tokenLooksLikePAT) {
-        message = `PAT format detected (CFPAT-) but rejected. Possible: token revoked, expired, or needs Authorize click in Contentful Account → CMA tokens page. Token tail: ...${cmaToken.slice(-6)}`;
+      let reason = "unauthorized";
+      if (cfErrorId === "OrganizationAccessGrantRequired") {
+        reason = "org_grant_required";
+        message = `Token valid, but NOT authorized for the organization that owns space '${spaceId}'. Fix: go to https://app.contentful.com/account/profile/cma_tokens → click Authorize button next to your token → grant access to the Credo org.`;
+      } else if (tokenLooksLikePAT) {
+        message = `PAT format detected (CFPAT-) but rejected. Contentful says: "${cfMessage || "Unauthorized"}". Likely cause: token revoked, expired, or org grant missing. Token tail: ...${cmaToken.slice(-6)}`;
       } else if (tokenLooksLikeCDA) {
         message = "Token format does NOT match Personal Access Token (CFPAT-... prefix expected). Likely pasted CDA or CPA. Get a PAT at https://app.contentful.com/account/profile/cma_tokens";
       } else {
@@ -236,8 +249,10 @@ app.post("/api/contentful/validate-cma", async (req, res) => {
       return res.json({
         valid: false,
         status: 401,
-        reason: "unauthorized",
+        reason,
         message,
+        contentfulErrorId: cfErrorId,
+        contentfulMessage: cfMessage,
         tokenFormat: tokenLooksLikePAT ? "pat" : tokenLooksLikeCDA ? "cda_or_cpa" : "unknown",
         whitespaceTrimmed: trimmed
       });
