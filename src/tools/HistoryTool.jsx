@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Header, Icon, API_BASE } from "../shared.jsx";
+import { Header, Icon, API_BASE, useLocalConfig } from "../shared.jsx";
 
 const TYPE_LABELS = {
   dataLayerScript: { label: "Data Layer Script", color: "var(--accent)", short: "DL" },
@@ -30,6 +30,37 @@ export default function HistoryTool({ onHome }) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState({});
   const [clearing, setClearing] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState(null);
+  const [backfillCreds, setBackfillCreds] = useLocalConfig("omnitrack:history:backfill", {
+    spaceId: "", cdaToken: "", environment: "master"
+  });
+  const [showBackfill, setShowBackfill] = useState(false);
+
+  async function runBackfill() {
+    if (!backfillCreds.spaceId || !backfillCreds.cdaToken) {
+      setErr("Space ID + CDA token required for backfill");
+      return;
+    }
+    setBackfilling(true);
+    setBackfillResult(null);
+    try {
+      const r = await fetch(`${API_BASE}/injection-log/backfill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(backfillCreds)
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      setBackfillResult(body);
+      await load();
+      setShowBackfill(false);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBackfilling(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -113,16 +144,58 @@ export default function HistoryTool({ onHome }) {
             </span>
           </div>
 
-          {entries.length === 0 && (
+          {entries.length === 0 && !showBackfill && (
             <div className="card">
               <div className="empty-state">
                 <div className="big">{"⌕"}</div>
                 <div>No injections logged yet.</div>
                 <br />
                 <div style={{ fontSize: 12, color: "var(--text2)", maxWidth: 480, lineHeight: 1.6 }}>
-                  Run an injection from Data Layer, GA4, GTM, GSC, or Schema tools.
-                  Every successful + failed inject lands here automatically.
+                  Logging started after server upgrade. Past injections aren't here.<br /><br />
+                  Two ways to populate:
                 </div>
+                <br />
+                <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                  <button className="btn btn-primary" onClick={() => setShowBackfill(true)}>
+                    <Icon name="refresh" /> Backfill from Contentful
+                  </button>
+                  <button className="btn btn-ghost" onClick={onHome}>
+                    Run new injection via tools
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showBackfill && (
+            <div className="card">
+              <div className="card-title"><span className="dot" />One-time Backfill from Contentful</div>
+              <p style={{ fontSize: 12, color: "var(--text2)", marginBottom: 16 }}>
+                Pulls existing dataLayerScript / headSnippet / seoSchema entries from Contentful and imports them into the local audit log. Requires CDA token (read-only). Skips entries already logged.
+              </p>
+              <div className="field-row">
+                <div>
+                  <label>SPACE ID</label>
+                  <input type="text" placeholder="i5javsx3u1y2" value={backfillCreds.spaceId}
+                    onChange={e => setBackfillCreds(p => ({ ...p, spaceId: e.target.value }))} />
+                </div>
+                <div>
+                  <label>CDA ACCESS TOKEN</label>
+                  <input type="password" placeholder="read-only token" value={backfillCreds.cdaToken}
+                    onChange={e => setBackfillCreds(p => ({ ...p, cdaToken: e.target.value }))} />
+                </div>
+              </div>
+              {backfillResult && (
+                <div className="status-row success" style={{ marginTop: 12 }}>
+                  <Icon name="check" /> Imported {backfillResult.imported} {"·"} skipped {backfillResult.skipped} (already logged)
+                </div>
+              )}
+              <div className="actions">
+                <button className="btn btn-ghost" onClick={() => setShowBackfill(false)}>Cancel</button>
+                <div className="spacer" />
+                <button className="btn btn-primary" onClick={runBackfill} disabled={backfilling || !backfillCreds.spaceId || !backfillCreds.cdaToken}>
+                  {backfilling ? <><span className="spinner" /> Importing...</> : "Run Backfill"}
+                </button>
               </div>
             </div>
           )}

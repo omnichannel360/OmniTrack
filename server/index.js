@@ -586,6 +586,54 @@ app.delete("/api/injection-log", (_req, res) => {
   res.json({ success: ok });
 });
 
+// Backfill: import existing Contentful entries into local log (one-time sync)
+app.post("/api/injection-log/backfill", async (req, res) => {
+  const { spaceId, cdaToken, environment } = req.body;
+  if (!spaceId || !cdaToken) return res.status(400).json({ error: "spaceId and cdaToken required" });
+  const env = environment || "master";
+  const base = `https://cdn.contentful.com/spaces/${encodeURIComponent(spaceId)}/environments/${encodeURIComponent(env)}`;
+  const types = ["dataLayerScript", "headSnippet", "seoSchema"];
+
+  // Avoid duplicating existing log entries — index by entryId
+  const existing = readInjections();
+  const existingIds = new Set(existing.map(e => e.entryId).filter(Boolean));
+
+  let imported = 0;
+  const errors = [];
+
+  try {
+    for (const ct of types) {
+      const url = `${base}/entries?access_token=${encodeURIComponent(cdaToken)}&content_type=${ct}&limit=200&order=sys.createdAt`;
+      const r = await fetch(url);
+      if (!r.ok) { errors.push({ ct, status: r.status }); continue; }
+      const data = await r.json();
+      for (const item of (data.items || [])) {
+        if (existingIds.has(item.sys.id)) continue;
+        const f = item.fields || {};
+        appendInjection({
+          type: ct,
+          spaceId,
+          entryId: item.sys.id,
+          contentTypeId: f.contentTypeId || f.toolType || f.schemaType || "",
+          toolType: f.toolType,
+          schemaType: f.schemaType,
+          identifier: f.identifier || f.sourceEntryId || "",
+          events: f.events || [],
+          scriptCode: f.scriptCode || f.code || f.jsonLd || "",
+          scriptLength: (f.scriptCode || f.code || f.jsonLd || "").length,
+          success: true,
+          backfilled: true,
+          originalCreatedAt: item.sys.createdAt
+        });
+        imported++;
+      }
+    }
+    res.json({ success: true, imported, skipped: existingIds.size, errors });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Website scanner: discover sitemap.xml and return URL list
 app.post("/api/website/discover-sitemap", async (req, res) => {
   const { url } = req.body;
