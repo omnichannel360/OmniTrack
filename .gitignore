@@ -29,3 +29,7 @@ dist-ssr
 omnitrack.log
 omnitrack.err
 *.err
+
+# Injection audit log (server-side)
+data/
+*.jsonl

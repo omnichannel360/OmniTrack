@@ -13,3 +13,5 @@ services:
       - OMNIBOT_API_KEY=${OMNIBOT_API_KEY:-}
     env_file:
       - .env
+    volumes:
+      - ./data:/app/data

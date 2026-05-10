@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { discoverSitemap, scanPage, scanPages, isPlaywrightAvailable, fetchWithTimeout } from "./scanner.js";
 import { classifyPages, clearAiCache } from "./aiClassifier.js";
+import { appendInjection, readInjections, clearLog, getStats } from "./injectionLog.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -328,12 +329,38 @@ app.post("/api/contentful/inject", async (req, res) => {
 
     if (response.ok) {
       const data = await response.json();
+      appendInjection({
+        type: "dataLayerScript",
+        spaceId,
+        entryId: data.sys?.id,
+        contentTypeId,
+        events: events || [],
+        scriptCode,
+        scriptLength: (scriptCode || "").length,
+        success: true
+      });
       res.json({ success: true, entryId: data.sys?.id });
     } else {
       const errorText = await response.text();
+      appendInjection({
+        type: "dataLayerScript",
+        spaceId,
+        contentTypeId,
+        events: events || [],
+        scriptLength: (scriptCode || "").length,
+        success: false,
+        error: `${response.status}: ${errorText.slice(0, 300)}`
+      });
       res.status(response.status).json({ error: errorText });
     }
   } catch (err) {
+    appendInjection({
+      type: "dataLayerScript",
+      spaceId,
+      contentTypeId,
+      success: false,
+      error: err.message
+    });
     res.status(500).json({ error: err.message });
   }
 });
@@ -457,11 +484,32 @@ app.post("/api/contentful/inject-head", async (req, res) => {
     });
     if (r.ok) {
       const d = await r.json();
+      appendInjection({
+        type: "headSnippet",
+        spaceId,
+        entryId: d.sys?.id,
+        toolType,
+        identifier: identifier || "",
+        scriptCode: code,
+        scriptLength: (code || "").length,
+        success: true
+      });
       res.json({ success: true, entryId: d.sys?.id });
     } else {
-      res.status(r.status).json({ error: await r.text() });
+      const errorText = await r.text();
+      appendInjection({
+        type: "headSnippet",
+        spaceId,
+        toolType,
+        identifier: identifier || "",
+        scriptLength: (code || "").length,
+        success: false,
+        error: `${r.status}: ${errorText.slice(0, 300)}`
+      });
+      res.status(r.status).json({ error: errorText });
     }
   } catch (err) {
+    appendInjection({ type: "headSnippet", spaceId, toolType, success: false, error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
@@ -492,13 +540,50 @@ app.post("/api/contentful/inject-schema", async (req, res) => {
     });
     if (r.ok) {
       const d = await r.json();
+      appendInjection({
+        type: "seoSchema",
+        spaceId,
+        entryId: d.sys?.id,
+        contentTypeId: contentTypeId || "",
+        sourceEntryId: entryId || "",
+        schemaType: schemaType || "Thing",
+        scriptCode: typeof jsonLd === "string" ? jsonLd : JSON.stringify(jsonLd),
+        scriptLength: (typeof jsonLd === "string" ? jsonLd : JSON.stringify(jsonLd) || "").length,
+        success: true
+      });
       res.json({ success: true, entryId: d.sys?.id });
     } else {
-      res.status(r.status).json({ error: await r.text() });
+      const errorText = await r.text();
+      appendInjection({
+        type: "seoSchema",
+        spaceId,
+        contentTypeId: contentTypeId || "",
+        schemaType: schemaType || "Thing",
+        success: false,
+        error: `${r.status}: ${errorText.slice(0, 300)}`
+      });
+      res.status(r.status).json({ error: errorText });
     }
   } catch (err) {
+    appendInjection({ type: "seoSchema", spaceId, success: false, error: err.message });
     res.status(500).json({ error: err.message });
   }
+});
+
+// Injection log — local audit trail (no Contentful round-trip)
+app.get("/api/injection-log", (req, res) => {
+  const limit = parseInt(req.query.limit || "500", 10);
+  const items = readInjections({ limit });
+  res.json({
+    success: true,
+    summary: getStats(),
+    entries: items
+  });
+});
+
+app.delete("/api/injection-log", (_req, res) => {
+  const ok = clearLog();
+  res.json({ success: ok });
 });
 
 // Website scanner: discover sitemap.xml and return URL list
