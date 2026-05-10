@@ -380,14 +380,16 @@ app.get("/api/contentful/history", async (req, res) => {
     for (const group of results) {
       for (const item of group.items) {
         const fields = item.fields || {};
+        // CDA only returns published entries — strips publishedAt field for security.
+        // If item appears in CDA response, it IS published.
         flat.push({
           entryId: item.sys.id,
           contentType: group.contentType,
           contentTypeId: fields.contentTypeId || fields.toolType || fields.schemaType || "—",
           createdAt: item.sys.createdAt,
           updatedAt: item.sys.updatedAt,
-          publishedAt: item.sys.publishedAt || null,
-          isPublished: !!item.sys.publishedAt,
+          publishedAt: item.sys.publishedAt || item.sys.updatedAt,
+          isPublished: true,
           events: fields.events || [],
           scriptLength: (fields.scriptCode || fields.code || fields.jsonLd || "").length,
           identifier: fields.identifier || fields.sourceEntryId || null,
