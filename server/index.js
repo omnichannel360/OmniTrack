@@ -356,6 +356,80 @@ app.get("/api/contentful/entries", async (req, res) => {
   }
 });
 
+// Injection history — aggregates all OmniTrack-created entries across 3 content types
+app.get("/api/contentful/history", async (req, res) => {
+  const { spaceId, cdaToken, environment, limit } = req.query;
+  if (!spaceId || !cdaToken) {
+    return res.status(400).json({ error: "spaceId and cdaToken are required" });
+  }
+  const env = environment || "master";
+  const cap = parseInt(limit || "200", 10);
+  const base = `https://cdn.contentful.com/spaces/${encodeURIComponent(spaceId)}/environments/${encodeURIComponent(env)}`;
+
+  const types = ["dataLayerScript", "headSnippet", "seoSchema"];
+  try {
+    const results = await Promise.all(types.map(async (ct) => {
+      const url = `${base}/entries?access_token=${encodeURIComponent(cdaToken)}&content_type=${ct}&limit=${cap}&order=-sys.createdAt`;
+      const r = await fetch(url);
+      if (!r.ok) return { contentType: ct, items: [], error: `HTTP ${r.status}` };
+      const data = await r.json();
+      return { contentType: ct, items: data.items || [], total: data.total };
+    }));
+
+    const flat = [];
+    for (const group of results) {
+      for (const item of group.items) {
+        const fields = item.fields || {};
+        flat.push({
+          entryId: item.sys.id,
+          contentType: group.contentType,
+          contentTypeId: fields.contentTypeId || fields.toolType || fields.schemaType || "—",
+          createdAt: item.sys.createdAt,
+          updatedAt: item.sys.updatedAt,
+          publishedAt: item.sys.publishedAt || null,
+          isPublished: !!item.sys.publishedAt,
+          events: fields.events || [],
+          scriptLength: (fields.scriptCode || fields.code || fields.jsonLd || "").length,
+          identifier: fields.identifier || fields.sourceEntryId || null,
+          preview: (fields.scriptCode || fields.code || fields.jsonLd || "").slice(0, 200)
+        });
+      }
+    }
+
+    flat.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    const summary = {
+      total: flat.length,
+      byContentType: results.reduce((acc, g) => ({ ...acc, [g.contentType]: g.items.length }), {}),
+      published: flat.filter(e => e.isPublished).length,
+      drafts: flat.filter(e => !e.isPublished).length,
+      errors: results.filter(g => g.error).map(g => ({ contentType: g.contentType, error: g.error }))
+    };
+
+    res.json({ success: true, summary, entries: flat });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get full entry detail (used to fetch script body on demand)
+app.get("/api/contentful/entry/:id", async (req, res) => {
+  const { id } = req.params;
+  const { spaceId, cdaToken, environment } = req.query;
+  if (!spaceId || !cdaToken) {
+    return res.status(400).json({ error: "spaceId and cdaToken are required" });
+  }
+  const env = environment || "master";
+  try {
+    const url = `https://cdn.contentful.com/spaces/${encodeURIComponent(spaceId)}/environments/${encodeURIComponent(env)}/entries/${encodeURIComponent(id)}?access_token=${encodeURIComponent(cdaToken)}`;
+    const r = await fetch(url);
+    if (!r.ok) return res.status(r.status).json({ error: `HTTP ${r.status}` });
+    res.json(await r.json());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Generic head-snippet inject (GA4 / GTM / GSC)
 app.post("/api/contentful/inject-head", async (req, res) => {
   const { spaceId, cmaToken, toolType, identifier, code } = req.body;

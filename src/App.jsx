@@ -8,6 +8,7 @@ import SchemaTool from "./tools/SchemaTool.jsx";
 import BootstrapTool from "./tools/BootstrapTool.jsx";
 import NextJsIntegrationTool from "./tools/NextJsIntegrationTool.jsx";
 import ScannerTool from "./tools/ScannerTool.jsx";
+import HistoryTool from "./tools/HistoryTool.jsx";
 
 export default function App() {
   const [view, setView] = useState("home");
@@ -21,5 +22,6 @@ export default function App() {
   if (view === "gsc") return <GSCTool onHome={goHome} />;
   if (view === "schema") return <SchemaTool onHome={goHome} />;
   if (view === "nextjs") return <NextJsIntegrationTool onHome={goHome} />;
+  if (view === "history") return <HistoryTool onHome={goHome} />;
   return <Home onSelect={setView} />;
 }

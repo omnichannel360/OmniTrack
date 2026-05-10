@@ -56,6 +56,13 @@ const TOOLS = [
     title: "Next.js Integration",
     desc: "Generate the Next.js component that reads injected entries from Contentful and renders them in your site head.",
     meta: "App Router \u00B7 1-file drop"
+  },
+  {
+    id: "history",
+    icon: "HX", iconClass: "schema",
+    title: "Injection History",
+    desc: "Audit every entry injected via OmniTrack across all three content types. Sort by date, filter by status, inspect script body.",
+    meta: "All entries \u00B7 CDA token"
   }
 ];
 
