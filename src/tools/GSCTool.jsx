@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet, InjectionResultCard } from "../shared.jsx";
 
 // Extract verification token from whatever user pasted: raw token, full meta tag,
@@ -51,17 +51,40 @@ function buildGSCMeta(code) {
 }
 
 export default function GSCTool({ onHome }) {
+  // Only persist credentials. Verification code + domain are session-only (don't survive reload).
   const [config, setConfig] = useLocalConfig("omnitrack:gsc", {
-    spaceId: "", cdaToken: "", cmaToken: "", environment: "master",
-    verificationCode: "", domain: ""
+    spaceId: "", cdaToken: "", cmaToken: "", environment: "master"
   });
+  const [verificationCode, setVerificationCode] = useState("");
+  const [domain, setDomain] = useState("");
+
+  // Migration: strip old verificationCode + domain from localStorage if persisted from previous version
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("omnitrack:gsc");
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed.verificationCode || parsed.domain) {
+        delete parsed.verificationCode;
+        delete parsed.domain;
+        localStorage.setItem("omnitrack:gsc", JSON.stringify(parsed));
+      }
+    } catch {}
+  }, []);
   const [injecting, setInjecting] = useState(false);
   const [status, setStatus] = useState(null);
   const [injectedEntries, setInjectedEntries] = useState([]);
 
-  const { token: cleanToken, warning: extractWarning } = extractGSCToken(config.verificationCode);
+  const { token: cleanToken, warning: extractWarning } = extractGSCToken(verificationCode);
   const valid = cleanToken && cleanToken.length >= 20 && !/[<>]/.test(cleanToken);
   const snippet = valid ? buildGSCMeta(cleanToken) : "";
+
+  function clearGSCForm() {
+    setVerificationCode("");
+    setDomain("");
+    setStatus(null);
+    setInjectedEntries([]);
+  }
 
   async function handleInject() {
     setInjecting(true);
@@ -73,7 +96,7 @@ export default function GSCTool({ onHome }) {
       } else {
         const r = await injectHeadSnippet({
           spaceId: config.spaceId, cmaToken: config.cmaToken,
-          toolType: "gsc", identifier: config.domain || cleanToken.slice(0, 12), code: snippet
+          toolType: "gsc", identifier: domain || cleanToken.slice(0, 12), code: snippet
         });
         if (r.ok) {
           setStatus({ type: "success", msg: "GSC meta tag injected" });
@@ -98,19 +121,26 @@ export default function GSCTool({ onHome }) {
       <ContentfulCredsCard config={config} setConfig={setConfig} />
 
       <div className="card">
-        <div className="card-title"><span className="dot" />GSC Configuration</div>
+        <div className="card-title">
+          <span className="dot" />GSC Configuration
+          {(verificationCode || domain) && (
+            <button className="copy-btn" onClick={clearGSCForm} style={{ marginLeft: "auto" }}>
+              <Icon name="x" /> Clear
+            </button>
+          )}
+        </div>
         <div className="field-row">
           <div>
             <label>DOMAIN (optional)</label>
             <input type="text" placeholder="example.com"
-              value={config.domain}
-              onChange={e => setConfig(p => ({ ...p, domain: e.target.value.trim() }))} />
+              value={domain}
+              onChange={e => setDomain(e.target.value.trim())} />
           </div>
           <div>
             <label>VERIFICATION CONTENT VALUE (or paste full meta tag)</label>
             <input type="text" placeholder="abc123...xyz OR <meta name=... />"
-              value={config.verificationCode}
-              onChange={e => setConfig(p => ({ ...p, verificationCode: e.target.value }))} />
+              value={verificationCode}
+              onChange={e => setVerificationCode(e.target.value)} />
           </div>
         </div>
         {cleanToken && (
@@ -124,7 +154,7 @@ export default function GSCTool({ onHome }) {
             <Icon name="warn" /> {extractWarning}
           </div>
         )}
-        {!valid && config.verificationCode && !extractWarning && (
+        {!valid && verificationCode && !extractWarning && (
           <div className="status-row warn"><Icon name="x" /> Verification code looks too short or contains markup. Expected ~43 alphanumeric chars.</div>
         )}
       </div>
