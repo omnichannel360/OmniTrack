@@ -1,6 +1,50 @@
 import { useState } from "react";
 import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet } from "../shared.jsx";
 
+// Extract verification token from whatever user pasted: raw token, full meta tag,
+// HTML-encoded tag, or just attribute fragment. Returns the clean token only.
+function extractGSCToken(input) {
+  if (!input) return { token: "", warning: null };
+  let raw = String(input).trim();
+
+  // Strip surrounding code fences / quotes
+  raw = raw.replace(/^[`'"]+|[`'"]+$/g, "").trim();
+
+  // Decode HTML entities (handles &quot; etc.)
+  const decoded = raw
+    .replace(/&quot;/gi, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+
+  // Try to extract content="..." attribute (multiple possible variants)
+  const metaMatch = decoded.match(/<meta[^>]*name\s*=\s*["']?google-site-verification["']?[^>]*content\s*=\s*["']([^"'>]+)["']/i)
+    || decoded.match(/<meta[^>]*content\s*=\s*["']([^"'>]+)["'][^>]*name\s*=\s*["']?google-site-verification["']?/i)
+    || decoded.match(/content\s*=\s*["']([^"'>]+)["']/i);
+
+  let token;
+  let warning = null;
+
+  if (metaMatch) {
+    token = metaMatch[1].trim();
+    if (decoded !== token) {
+      warning = "Auto-extracted token from meta tag. Tool wraps it in <meta> on inject.";
+    }
+  } else {
+    // Treat input as raw token. Strip any HTML/whitespace.
+    token = decoded.replace(/[<>"']/g, "").trim();
+  }
+
+  // Final safety: if token still looks like nested HTML, reject
+  if (/<meta|content=/i.test(token)) {
+    warning = "Token still contains HTML markup. Paste only the alphanumeric value from GSC.";
+  }
+
+  return { token, warning };
+}
+
 function buildGSCMeta(code) {
   const safe = (code || "").replace(/"/g, "&quot;");
   return `<meta name="google-site-verification" content="${safe}" />`;
@@ -14,8 +58,9 @@ export default function GSCTool({ onHome }) {
   const [injecting, setInjecting] = useState(false);
   const [status, setStatus] = useState(null);
 
-  const valid = config.verificationCode && config.verificationCode.length >= 20;
-  const snippet = valid ? buildGSCMeta(config.verificationCode) : "";
+  const { token: cleanToken, warning: extractWarning } = extractGSCToken(config.verificationCode);
+  const valid = cleanToken && cleanToken.length >= 20 && !/[<>]/.test(cleanToken);
+  const snippet = valid ? buildGSCMeta(cleanToken) : "";
 
   async function handleInject() {
     setInjecting(true);
@@ -26,7 +71,7 @@ export default function GSCTool({ onHome }) {
       } else {
         const r = await injectHeadSnippet({
           spaceId: config.spaceId, cmaToken: config.cmaToken,
-          toolType: "gsc", identifier: config.domain || config.verificationCode.slice(0, 12), code: snippet
+          toolType: "gsc", identifier: config.domain || cleanToken.slice(0, 12), code: snippet
         });
         setStatus(r.ok
           ? { type: "success", msg: `GSC meta tag injected (entry ${r.body.entryId})` }
@@ -57,14 +102,25 @@ export default function GSCTool({ onHome }) {
               onChange={e => setConfig(p => ({ ...p, domain: e.target.value.trim() }))} />
           </div>
           <div>
-            <label>VERIFICATION CONTENT VALUE</label>
-            <input type="text" placeholder="abc123...xyz"
+            <label>VERIFICATION CONTENT VALUE (or paste full meta tag)</label>
+            <input type="text" placeholder="abc123...xyz OR <meta name=... />"
               value={config.verificationCode}
-              onChange={e => setConfig(p => ({ ...p, verificationCode: e.target.value.trim() }))} />
+              onChange={e => setConfig(p => ({ ...p, verificationCode: e.target.value }))} />
           </div>
         </div>
-        {!valid && config.verificationCode && (
-          <div className="status-row warn"><Icon name="x" /> Verification code looks too short.</div>
+        {cleanToken && (
+          <div style={{ marginTop: 10, fontSize: 11, color: "var(--text2)", fontFamily: "var(--mono)" }}>
+            Extracted token: <code style={{ color: valid ? "var(--ok, #4ade80)" : "var(--danger)" }}>{cleanToken.slice(0, 50)}{cleanToken.length > 50 ? "..." : ""}</code>
+            <span style={{ marginLeft: 8, opacity: 0.6 }}>({cleanToken.length} chars)</span>
+          </div>
+        )}
+        {extractWarning && (
+          <div className="status-row warn" style={{ marginTop: 8 }}>
+            <Icon name="warn" /> {extractWarning}
+          </div>
+        )}
+        {!valid && config.verificationCode && !extractWarning && (
+          <div className="status-row warn"><Icon name="x" /> Verification code looks too short or contains markup. Expected ~43 alphanumeric chars.</div>
         )}
       </div>
 
