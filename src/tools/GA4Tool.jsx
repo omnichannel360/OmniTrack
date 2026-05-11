@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet } from "../shared.jsx";
+import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet, InjectionResultCard } from "../shared.jsx";
 
 function buildGA4Snippet(id) {
   return `<!-- Google tag (gtag.js) - GA4 -->
@@ -19,6 +19,7 @@ export default function GA4Tool({ onHome }) {
   });
   const [injecting, setInjecting] = useState(false);
   const [status, setStatus] = useState(null);
+  const [injectedEntries, setInjectedEntries] = useState([]);
 
   const validId = /^G-[A-Z0-9]{4,}$/i.test(config.measurementId);
   const snippet = validId ? buildGA4Snippet(config.measurementId) : "";
@@ -26,6 +27,7 @@ export default function GA4Tool({ onHome }) {
   async function handleInject() {
     setInjecting(true);
     setStatus(null);
+    setInjectedEntries([]);
     try {
       if (!config.spaceId || !config.cmaToken) {
         setStatus({ type: "warn", msg: "Missing Contentful CMA credentials \u2014 snippet previewed only (no inject)." });
@@ -34,9 +36,12 @@ export default function GA4Tool({ onHome }) {
           spaceId: config.spaceId, cmaToken: config.cmaToken,
           toolType: "ga4", identifier: config.measurementId, code: snippet
         });
-        setStatus(r.ok
-          ? { type: "success", msg: `Injected GA4 snippet as headSnippet entry ${r.body.entryId || ""}` }
-          : { type: "error", msg: `CMA error ${r.status}: ${r.body.error || "unknown"}` });
+        if (r.ok) {
+          setStatus({ type: "success", msg: "GA4 snippet injected" });
+          setInjectedEntries([{ entryId: r.body.entryId, label: `GA4 gtag.js \u00b7 ${config.measurementId}`, expectedCode: snippet }]);
+        } else {
+          setStatus({ type: "error", msg: `CMA error ${r.status}: ${r.body.error || "unknown"}` });
+        }
       }
     } catch (e) {
       setStatus({ type: "error", msg: e.message });
@@ -92,6 +97,13 @@ export default function GA4Tool({ onHome }) {
       )}
 
       {status && <div className={`status-row ${status.type}`}><Icon name={status.type === "success" ? "check" : "x"} /> {status.msg}</div>}
+
+      <InjectionResultCard
+        entries={injectedEntries}
+        spaceId={config.spaceId}
+        cdaToken={config.cdaToken}
+        environment={config.environment}
+      />
 
       <div className="actions">
         <button className="btn btn-ghost" onClick={onHome}><Icon name="back" /> Home</button>

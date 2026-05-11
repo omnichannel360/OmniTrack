@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Header, Icon, API_BASE } from "../shared.jsx";
+import { Header, Icon, API_BASE, InjectionResultCard } from "../shared.jsx";
 
 const PHASES = ["Connect", "Discover", "Generate", "Inject", "Validate"];
 
@@ -204,6 +204,7 @@ export default function DataLayerTool({ onHome }) {
   const [injecting, setInjecting] = useState(false);
   const [injected, setInjected] = useState(false);
   const [injectStats, setInjectStats] = useState({ ok: 0, failed: 0, errors: [] });
+  const [injectedEntries, setInjectedEntries] = useState([]);
   const [cmaValidation, setCmaValidation] = useState(null); // { valid, message, ... } from validate-cma
   const [validatingCma, setValidatingCma] = useState(false);
   const [injectLog, setInjectLog] = useState([]);
@@ -431,6 +432,7 @@ export default function DataLayerTool({ onHome }) {
     setInjecting(true);
     setInjectLog([]);
     setInjectStats({ ok: 0, failed: 0, errors: [] });
+    setInjectedEntries([]);
     addLog("Initializing Contentful Management API connection...", "accent");
 
     // Pre-flight: validate CMA token before processing 21 scripts
@@ -482,6 +484,7 @@ export default function DataLayerTool({ onHome }) {
     let okCount = 0;
     let failCount = 0;
     const errors = [];
+    const createdEntries = [];
 
     for (let i = 0; i < scripts.length; i++) {
       const { ct, code } = scripts[i];
@@ -504,6 +507,7 @@ export default function DataLayerTool({ onHome }) {
           if (res.ok) {
             const body = await res.json();
             okCount++;
+            createdEntries.push({ entryId: body.entryId, label: `${ct.name} \u00B7 ${ct.sys.id}`, expectedCode: code });
             addLog(`\u2713 Injected: ${ct.name} \u00B7 entryId ${body.entryId || "(none)"}`, "ok");
           } else {
             failCount++;
@@ -531,6 +535,7 @@ export default function DataLayerTool({ onHome }) {
       addLog(`\u2717 INJECTION FAILED: 0/${scripts.length} succeeded, all ${failCount} errored`, "error");
     }
     setInjectStats({ ok: okCount, failed: failCount, errors });
+    setInjectedEntries(createdEntries);
     setInjecting(false);
     setInjected(okCount > 0); // only set injected if at least one succeeded
   }
@@ -983,6 +988,14 @@ export default function DataLayerTool({ onHome }) {
               )}
             </>
           )}
+
+          <InjectionResultCard
+            entries={injectedEntries}
+            spaceId={config.spaceId}
+            cdaToken={config.cdaToken}
+            environment={config.environment || "master"}
+          />
+
           <div className="actions">
             <button className="btn btn-ghost" onClick={() => setPhase(2)}>{"\u2190"} Back</button>
             <div className="spacer" />

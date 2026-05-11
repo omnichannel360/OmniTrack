@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet, API_BASE } from "../shared.jsx";
+import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet, InjectionResultCard } from "../shared.jsx";
 
 // Extract verification token from whatever user pasted: raw token, full meta tag,
 // HTML-encoded tag, or just attribute fragment. Returns the clean token only.
@@ -57,50 +57,7 @@ export default function GSCTool({ onHome }) {
   });
   const [injecting, setInjecting] = useState(false);
   const [status, setStatus] = useState(null);
-  const [validation, setValidation] = useState(null);
-  const [validating, setValidating] = useState(false);
-
-  function contentfulEntryUrl(entryId) {
-    if (!config.spaceId || !entryId) return null;
-    return `https://app.contentful.com/spaces/${config.spaceId}/environments/${config.environment || "master"}/entries/${entryId}`;
-  }
-
-  async function validateEntry(entryId) {
-    setValidating(true);
-    try {
-      const qs = new URLSearchParams({
-        spaceId: config.spaceId,
-        cdaToken: config.cdaToken || "",
-        environment: config.environment || "master"
-      });
-      const r = await fetch(`${API_BASE}/contentful/entry/${entryId}?${qs.toString()}`);
-      const body = await r.json();
-      if (!r.ok) {
-        // Likely entry is draft (CDA only returns published)
-        setValidation({
-          ok: false,
-          published: false,
-          message: "Entry created but NOT published. CDA cannot read it until you publish in Contentful."
-        });
-        return;
-      }
-      const code = body.fields?.code || "";
-      const matches = code.trim() === snippet.trim();
-      setValidation({
-        ok: matches,
-        published: true,
-        codeMatches: matches,
-        actualCode: code,
-        message: matches
-          ? "Verified — entry published + content matches generated snippet"
-          : "Entry published BUT content does not match expected snippet"
-      });
-    } catch (e) {
-      setValidation({ ok: false, message: e.message });
-    } finally {
-      setValidating(false);
-    }
-  }
+  const [injectedEntries, setInjectedEntries] = useState([]);
 
   const { token: cleanToken, warning: extractWarning } = extractGSCToken(config.verificationCode);
   const valid = cleanToken && cleanToken.length >= 20 && !/[<>]/.test(cleanToken);
@@ -109,7 +66,7 @@ export default function GSCTool({ onHome }) {
   async function handleInject() {
     setInjecting(true);
     setStatus(null);
-    setValidation(null);
+    setInjectedEntries([]);
     try {
       if (!config.spaceId || !config.cmaToken) {
         setStatus({ type: "warn", msg: "Missing CMA credentials \u2014 snippet previewed only." });
@@ -119,11 +76,8 @@ export default function GSCTool({ onHome }) {
           toolType: "gsc", identifier: config.domain || cleanToken.slice(0, 12), code: snippet
         });
         if (r.ok) {
-          setStatus({ type: "success", msg: "GSC meta tag injected", entryId: r.body.entryId });
-          // Auto-validate after injection if CDA token present
-          if (config.cdaToken) {
-            setTimeout(() => validateEntry(r.body.entryId), 1500);
-          }
+          setStatus({ type: "success", msg: "GSC meta tag injected" });
+          setInjectedEntries([{ entryId: r.body.entryId, label: "GSC Verification Meta Tag", expectedCode: snippet }]);
         } else {
           setStatus({ type: "error", msg: `CMA error ${r.status}: ${r.body.error || "unknown"}` });
         }
@@ -191,53 +145,18 @@ export default function GSCTool({ onHome }) {
       )}
 
       {status && (
-        <div className="card" style={{ marginTop: 16, borderColor: status.type === "success" ? "var(--success)" : status.type === "error" ? "var(--danger)" : "var(--warn)" }}>
-          <div className={`status-row ${status.type}`}>
-            <Icon name={status.type === "success" ? "check" : "x"} /> {status.msg}
-            {status.entryId && (
-              <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 11, opacity: 0.7 }}>
-                entry: {status.entryId}
-              </span>
-            )}
-          </div>
-          {status.entryId && (
-            <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-              <a
-                href={contentfulEntryUrl(status.entryId)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn btn-ghost"
-                style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none", justifyContent: "center" }}
-              >
-                <Icon name="arrow" /> Open entry in Contentful
-              </a>
-              <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--text3)", wordBreak: "break-all" }}>
-                {contentfulEntryUrl(status.entryId)}
-              </div>
-              {config.cdaToken && (
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => validateEntry(status.entryId)}
-                  disabled={validating}
-                  style={{ fontSize: 12 }}
-                >
-                  {validating ? <><span className="spinner" /> Validating...</> : <><Icon name="refresh" /> Re-validate via CDA</>}
-                </button>
-              )}
-              {validation && (
-                <div className={`status-row ${validation.ok ? "success" : "warn"}`} style={{ marginTop: 4 }}>
-                  <Icon name={validation.ok ? "check" : "warn"} /> {validation.message}
-                </div>
-              )}
-              {validation && !validation.published && (
-                <div style={{ fontSize: 11, color: "var(--text2)", lineHeight: 1.5, padding: 10, background: "rgba(255,181,71,0.06)", borderRadius: 4 }}>
-                  <strong>Fix:</strong> Open entry in Contentful (link above) → top-right click <strong>Publish</strong>. CDA + Credo's Next.js cannot read draft entries.
-                </div>
-              )}
-            </div>
-          )}
+        <div className={`status-row ${status.type}`}>
+          <Icon name={status.type === "success" ? "check" : "x"} /> {status.msg}
         </div>
       )}
+
+      <InjectionResultCard
+        entries={injectedEntries}
+        spaceId={config.spaceId}
+        cdaToken={config.cdaToken}
+        environment={config.environment}
+      />
+
 
       <div className="actions">
         <button className="btn btn-ghost" onClick={onHome}><Icon name="back" /> Home</button>

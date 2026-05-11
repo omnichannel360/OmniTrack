@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet } from "../shared.jsx";
+import { Header, Icon, ContentfulCredsCard, useLocalConfig, injectHeadSnippet, InjectionResultCard } from "../shared.jsx";
 
 function buildGTMHead(id) {
   return `<!-- Google Tag Manager -->
@@ -25,6 +25,7 @@ export default function GTMTool({ onHome }) {
   });
   const [injecting, setInjecting] = useState(false);
   const [log, setLog] = useState([]);
+  const [injectedEntries, setInjectedEntries] = useState([]);
 
   const valid = /^GTM-[A-Z0-9]{5,}$/i.test(config.containerId);
   const head = valid ? buildGTMHead(config.containerId) : "";
@@ -33,6 +34,7 @@ export default function GTMTool({ onHome }) {
   async function handleInject() {
     setInjecting(true);
     setLog([]);
+    setInjectedEntries([]);
     const push = (type, msg) => setLog(l => [...l, { type, msg, ts: Date.now() }]);
 
     if (!config.spaceId || !config.cmaToken) {
@@ -41,12 +43,14 @@ export default function GTMTool({ onHome }) {
       return;
     }
     try {
+      const created = [];
       push("accent", "Injecting GTM head snippet...");
       const r1 = await injectHeadSnippet({
         spaceId: config.spaceId, cmaToken: config.cmaToken,
         toolType: "gtm-head", identifier: config.containerId, code: head
       });
       push(r1.ok ? "ok" : "err", r1.ok ? `\u2713 Head snippet injected (${r1.body.entryId})` : `\u2717 Head error ${r1.status}`);
+      if (r1.ok) created.push({ entryId: r1.body.entryId, label: `GTM Head \u00b7 ${config.containerId}`, expectedCode: head });
 
       push("accent", "Injecting GTM body noscript snippet...");
       const r2 = await injectHeadSnippet({
@@ -54,6 +58,9 @@ export default function GTMTool({ onHome }) {
         toolType: "gtm-body", identifier: config.containerId, code: body
       });
       push(r2.ok ? "ok" : "err", r2.ok ? `\u2713 Body snippet injected (${r2.body.entryId})` : `\u2717 Body error ${r2.status}`);
+      if (r2.ok) created.push({ entryId: r2.body.entryId, label: `GTM Body noscript \u00b7 ${config.containerId}`, expectedCode: body });
+
+      setInjectedEntries(created);
     } catch (e) {
       push("err", e.message);
     } finally {
@@ -112,6 +119,13 @@ export default function GTMTool({ onHome }) {
           ))}
         </div>
       )}
+
+      <InjectionResultCard
+        entries={injectedEntries}
+        spaceId={config.spaceId}
+        cdaToken={config.cdaToken}
+        environment={config.environment}
+      />
 
       <div className="actions">
         <button className="btn btn-ghost" onClick={onHome}><Icon name="back" /> Home</button>

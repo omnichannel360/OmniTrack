@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Header, Icon, ContentfulCredsCard, useLocalConfig, API_BASE } from "../shared.jsx";
+import { Header, Icon, ContentfulCredsCard, useLocalConfig, API_BASE, InjectionResultCard } from "../shared.jsx";
 
 const SCHEMA_TYPE_MAP = {
   blogPost: "Article", article: "Article", post: "Article",
@@ -78,6 +78,7 @@ export default function SchemaTool({ onHome }) {
   const [err, setErr] = useState("");
   const [injecting, setInjecting] = useState(false);
   const [log, setLog] = useState([]);
+  const [injectedEntries, setInjectedEntries] = useState([]);
 
   async function loadContentTypes() {
     setLoading(true);
@@ -129,7 +130,9 @@ export default function SchemaTool({ onHome }) {
     }
     setInjecting(true);
     setLog([]);
+    setInjectedEntries([]);
     const push = (type, msg) => setLog(l => [...l, { type, msg, ts: Date.now() }]);
+    const created = [];
     for (const a of analyzed) {
       const entryId = a.entry.sys.id;
       push("accent", `Injecting schema for ${entryId} (${a.schemaType})`);
@@ -144,12 +147,22 @@ export default function SchemaTool({ onHome }) {
           })
         });
         const body = await r.json().catch(() => ({}));
-        push(r.ok ? "ok" : "err", r.ok ? `\u2713 ${entryId} \u2192 ${body.entryId}` : `\u2717 ${entryId} \u2014 ${body.error || r.status}`);
+        if (r.ok) {
+          push("ok", `\u2713 ${entryId} \u2192 ${body.entryId}`);
+          created.push({
+            entryId: body.entryId,
+            label: `${a.schemaType} \u00b7 source: ${entryId}`,
+            expectedCode: typeof a.jsonLd === "string" ? a.jsonLd : JSON.stringify(a.jsonLd)
+          });
+        } else {
+          push("err", `\u2717 ${entryId} \u2014 ${body.error || r.status}`);
+        }
       } catch (e) {
         push("err", `${entryId} \u2014 ${e.message}`);
       }
     }
     push("accent", "Done.");
+    setInjectedEntries(created);
     setInjecting(false);
   }
 
@@ -252,6 +265,13 @@ export default function SchemaTool({ onHome }) {
           ))}
         </div>
       )}
+
+      <InjectionResultCard
+        entries={injectedEntries}
+        spaceId={config.spaceId}
+        cdaToken={config.cdaToken}
+        environment={config.environment}
+      />
 
       <div className="actions">
         <button className="btn btn-ghost" onClick={onHome}><Icon name="back" /> Home</button>
